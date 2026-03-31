@@ -31,3 +31,16 @@ export function hexHashToCid(hexHash: string): string {
 export function ipfsUrl(cid: string): string {
   return `${IPFS_GATEWAY}/${cid}`;
 }
+
+/**
+ * Check if a CID is available on the IPFS gateway (HEAD request).
+ * Returns false on network/CORS errors.
+ */
+export async function checkIpfsAvailable(cid: string): Promise<boolean> {
+  try {
+    const res = await fetch(ipfsUrl(cid), { method: "HEAD" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

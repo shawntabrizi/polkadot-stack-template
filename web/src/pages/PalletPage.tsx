@@ -5,7 +5,7 @@ import { getClient } from "../hooks/useChain";
 import { stack_template } from "@polkadot-api/descriptors";
 import { Binary } from "polkadot-api";
 import FileDropZone from "../components/FileDropZone";
-import { hexHashToCid, ipfsUrl } from "../utils/cid";
+import { hexHashToCid, ipfsUrl, checkIpfsAvailable } from "../utils/cid";
 import {
   uploadToBulletin,
   checkBulletinAuthorization,
@@ -35,6 +35,7 @@ export default function PalletPage() {
   const [uploadToIpfs, setUploadToIpfs] = useState(false);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [loading, setLoading] = useState(false);
+  const [ipfsAvailable, setIpfsAvailable] = useState<Record<string, boolean>>({});
 
   const account = devAccounts[selectedAccount];
 
@@ -66,6 +67,15 @@ export default function PalletPage() {
         block: Number(entry.value[1]),
       }));
       setClaims(result);
+      // Check IPFS availability in background
+      result.forEach((claim) => {
+        const cid = hexHashToCid(claim.hash);
+        checkIpfsAvailable(cid).then((available) => {
+          if (available) {
+            setIpfsAvailable((prev) => ({ ...prev, [claim.hash]: true }));
+          }
+        });
+      });
     } catch (e) {
       console.error("Failed to load claims:", e);
     } finally {
@@ -231,15 +241,20 @@ export default function PalletPage() {
                       {claim.owner.slice(0, 8)}...{claim.owner.slice(-6)}
                     </span>{" "}
                     | Block:{" "}
-                    <span className="text-gray-300">{claim.block}</span> |{" "}
-                    <a
-                      href={ipfsUrl(cid)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 underline"
-                    >
-                      View on IPFS
-                    </a>
+                    <span className="text-gray-300">{claim.block}</span>
+                    {ipfsAvailable[claim.hash] && (
+                      <>
+                        {" "}|{" "}
+                        <a
+                          href={ipfsUrl(cid)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline"
+                        >
+                          View on IPFS
+                        </a>
+                      </>
+                    )}
                   </p>
                   {claim.owner === account.address && (
                     <button

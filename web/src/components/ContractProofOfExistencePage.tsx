@@ -8,7 +8,7 @@ import {
 } from "../config/evm";
 import { devAccounts } from "../hooks/useAccount";
 import FileDropZone from "./FileDropZone";
-import { hexHashToCid, ipfsUrl } from "../utils/cid";
+import { hexHashToCid, ipfsUrl, checkIpfsAvailable } from "../utils/cid";
 import {
   uploadToBulletin,
   checkBulletinAuthorization,
@@ -57,6 +57,7 @@ export default function ContractProofOfExistencePage({
   const [claims, setClaims] = useState<Claim[]>([]);
   const [txStatus, setTxStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [ipfsAvailable, setIpfsAvailable] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (contractAddress) {
@@ -109,6 +110,15 @@ export default function ContractProofOfExistencePage({
         result.push({ hash, owner, block });
       }
       setClaims(result);
+      // Check IPFS availability in background
+      result.forEach((claim) => {
+        const cid = hexHashToCid(claim.hash);
+        checkIpfsAvailable(cid).then((available) => {
+          if (available) {
+            setIpfsAvailable((prev) => ({ ...prev, [claim.hash]: true }));
+          }
+        });
+      });
     } catch (e) {
       console.error("Failed to load claims:", e);
       setTxStatus(`Error: ${e instanceof Error ? e.message : e}`);
@@ -297,15 +307,19 @@ export default function ContractProofOfExistencePage({
                     <span className="text-gray-300">
                       {claim.block.toString()}
                     </span>{" "}
-                    |{" "}
-                    <a
-                      href={ipfsUrl(cid)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 underline"
-                    >
-                      View on IPFS
-                    </a>
+                    {ipfsAvailable[claim.hash] && (
+                      <>
+                        {" "}|{" "}
+                        <a
+                          href={ipfsUrl(cid)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline"
+                        >
+                          View on IPFS
+                        </a>
+                      </>
+                    )}
                   </p>
                   {claim.owner.toLowerCase() ===
                     currentAddress.toLowerCase() && (
