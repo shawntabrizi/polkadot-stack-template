@@ -27,9 +27,8 @@ Thumbs.db
 chain_data/
 /data/
 
-# PAPI generated
-web/.papi/descriptors/
-web/.papi/metadata/
+# PAPI generated (committed so frontend works out of the box)
+# Regenerate with: cd web && npx papi update && npx papi
 
 # Hardhat
 contracts/*/cache/
