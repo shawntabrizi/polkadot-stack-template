@@ -1,4 +1,4 @@
-use crate::commands::hash_input;
+use crate::commands::{hash_input, resolve_substrate_signer};
 use alloy::primitives::{Address, FixedBytes};
 use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
@@ -47,8 +47,8 @@ pub enum ContractAction {
         /// Also upload the file to the Bulletin Chain (IPFS)
         #[arg(long, requires = "file")]
         upload: bool,
-        /// Signing account (alice, bob, charlie)
-        #[arg(long, default_value = "alice")]
+        /// Signer: dev name (alice/bob/charlie) or 0x private key
+        #[arg(long, short, default_value = "alice")]
         signer: String,
     },
     /// Revoke a proof-of-existence claim
@@ -58,8 +58,8 @@ pub enum ContractAction {
         contract_type: String,
         /// The 0x-prefixed hash to revoke
         hash: String,
-        /// Signing account (alice, bob, charlie)
-        #[arg(long, default_value = "alice")]
+        /// Signer: dev name (alice/bob/charlie) or 0x private key
+        #[arg(long, short, default_value = "alice")]
         signer: String,
     },
     /// Get the claim details for a hash
@@ -162,7 +162,9 @@ pub async fn run(
 
             if upload {
                 let bytes = file_bytes.ok_or("--upload requires --file")?;
-                crate::commands::upload_to_bulletin(&bytes).await?;
+                // Use Substrate signer for Bulletin Chain (maps dev names to sr25519 keys)
+                let substrate_signer = resolve_substrate_signer(&signer)?;
+                crate::commands::upload_to_bulletin(&bytes, &substrate_signer).await?;
             }
 
             let deployments = load_deployments()?;

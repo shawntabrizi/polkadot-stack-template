@@ -17,4 +17,5 @@ serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 hex = "0.4"
 blake2 = "0.10"
+bip39 = "2"
 reqwest = { version = "0.12", features = ["json"] }
