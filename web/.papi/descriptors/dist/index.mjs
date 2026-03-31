@@ -14,8 +14,8 @@ var toBinary = (base64) => {
 };
 
 // .papi/descriptors/src/stack_template.ts
-var descriptorValues = import("./descriptors-JLLVBB7O.mjs").then((module) => module["Stack_template"]);
-var metadataTypes = import("./metadataTypes-63YLTW26.mjs").then(
+var descriptorValues = import("./descriptors-WAHLXGW2.mjs").then((module) => module["Stack_template"]);
+var metadataTypes = import("./metadataTypes-6KBBW7VV.mjs").then(
   (module) => toBinary("default" in module ? module.default : module)
 );
 var asset = {};
@@ -26,6 +26,20 @@ var getMetadata = () => import("./stack_template_metadata-TG3TQMYR.mjs").then(
 var genesis = "0xa34ba5b6c05f162c2576e2fa1a07338299870f428f5dfe47990a1e2d374e88bb";
 var _allDescriptors = { descriptors: descriptorValues, metadataTypes, asset, extensions, getMetadata, genesis };
 var stack_template_default = _allDescriptors;
+
+// .papi/descriptors/src/bulletin.ts
+var descriptorValues2 = import("./descriptors-WAHLXGW2.mjs").then((module) => module["Bulletin"]);
+var metadataTypes2 = import("./metadataTypes-6KBBW7VV.mjs").then(
+  (module) => toBinary("default" in module ? module.default : module)
+);
+var asset2 = {};
+var extensions2 = {};
+var getMetadata2 = () => import("./bulletin_metadata-2ZJKALYK.mjs").then(
+  (module) => toBinary("default" in module ? module.default : module)
+);
+var genesis2 = "0x744960c32e3a3df5440e1ecd4d34096f1ce2230d7016a5ada8a765d5a622b4ea";
+var _allDescriptors2 = { descriptors: descriptorValues2, metadataTypes: metadataTypes2, asset: asset2, extensions: extensions2, getMetadata: getMetadata2, genesis: genesis2 };
+var bulletin_default = _allDescriptors2;
 
 // .papi/descriptors/src/common-types.ts
 import { _Enum } from "polkadot-api";
@@ -77,10 +91,14 @@ var XcmV4AssetAssetFilter = _Enum;
 var XcmV4AssetWildAsset = _Enum;
 var TransactionValidityUnknownTransaction = _Enum;
 var TransactionValidityTransactionSource = _Enum;
+var XcmVersionedAsset = _Enum;
 
 // .papi/descriptors/src/index.ts
-var metadatas = { ["0xdd126935b4c09d1ce6e4b1a6d80b07f88a202b05e82a75cf9c7e49825d0473f9"]: stack_template_default };
-var getMetadata2 = async (codeHash) => {
+var metadatas = {
+  ["0xdd126935b4c09d1ce6e4b1a6d80b07f88a202b05e82a75cf9c7e49825d0473f9"]: stack_template_default,
+  ["0x9838682961f13a0665e7dac54178aa99531391530e60e879a9eab84d6dc2a199"]: bulletin_default
+};
+var getMetadata3 = async (codeHash) => {
   try {
     return await metadatas[codeHash].getMetadata();
   } catch {
@@ -132,10 +150,12 @@ export {
   XcmV5Junctions,
   XcmV5NetworkId,
   XcmV5WildAsset,
+  XcmVersionedAsset,
   XcmVersionedAssetId,
   XcmVersionedAssets,
   XcmVersionedLocation,
   XcmVersionedXcm,
-  getMetadata2 as getMetadata,
+  bulletin_default as bulletin,
+  getMetadata3 as getMetadata,
   stack_template_default as stack_template
 };

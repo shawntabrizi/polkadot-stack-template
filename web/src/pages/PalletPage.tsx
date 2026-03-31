@@ -5,6 +5,11 @@ import { getClient } from "../hooks/useChain";
 import { stack_template } from "@polkadot-api/descriptors";
 import { Binary } from "polkadot-api";
 import FileDropZone from "../components/FileDropZone";
+import { hexHashToCid, ipfsUrl } from "../utils/cid";
+import {
+  uploadToBulletin,
+  checkBulletinAuthorization,
+} from "../hooks/useBulletin";
 
 interface Claim {
   hash: string;
@@ -26,12 +31,13 @@ export default function PalletPage() {
   const { selectedAccount, setSelectedAccount, setTxStatus, txStatus, wsUrl } =
     useChainStore();
   const [fileHash, setFileHash] = useState<`0x${string}` | null>(null);
+  const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
+  const [uploadToIpfs, setUploadToIpfs] = useState(false);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [loading, setLoading] = useState(false);
 
   const account = devAccounts[selectedAccount];
 
-  // Load claims on mount
   useEffect(() => {
     loadClaims();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -43,6 +49,10 @@ export default function PalletPage() {
 
   const onFileHashed = useCallback((hash: `0x${string}`) => {
     setFileHash(hash);
+  }, []);
+
+  const onFileBytes = useCallback((bytes: Uint8Array) => {
+    setFileBytes(bytes);
   }, []);
 
   async function loadClaims() {
@@ -66,7 +76,26 @@ export default function PalletPage() {
   async function createClaim() {
     if (!fileHash) return;
     try {
-      setTxStatus("Submitting create_claim...");
+      // Optional: upload to Bulletin Chain first
+      if (uploadToIpfs && fileBytes) {
+        setTxStatus("Checking Bulletin Chain authorization...");
+        const authorized = await checkBulletinAuthorization(
+          account.address,
+          fileBytes.length
+        );
+        if (!authorized) {
+          setTxStatus(
+            "Error: Not authorized to upload to Bulletin Chain. Authorization is required via chain governance."
+          );
+          return;
+        }
+        setTxStatus("Uploading to Bulletin Chain (IPFS)...");
+        await uploadToBulletin(fileBytes, account.signer);
+        setTxStatus("Upload complete. Submitting claim...");
+      } else {
+        setTxStatus("Submitting create_claim...");
+      }
+
       const api = getApi();
       const tx = api.tx.TemplatePallet.create_claim({
         hash: Binary.fromHex(fileHash),
@@ -78,6 +107,7 @@ export default function PalletPage() {
       }
       setTxStatus("Claim created successfully!");
       setFileHash(null);
+      setFileBytes(null);
       loadClaims();
     } catch (e) {
       console.error("Transaction failed:", e);
@@ -133,7 +163,13 @@ export default function PalletPage() {
           </select>
         </div>
 
-        <FileDropZone onFileHashed={onFileHashed} />
+        <FileDropZone
+          onFileHashed={onFileHashed}
+          onFileBytes={onFileBytes}
+          showUploadToggle={true}
+          uploadToIpfs={uploadToIpfs}
+          onUploadToggle={setUploadToIpfs}
+        />
 
         {fileHash && (
           <div className="space-y-2">
@@ -179,31 +215,43 @@ export default function PalletPage() {
           </p>
         ) : (
           <div className="space-y-2">
-            {claims.map((claim) => (
-              <div
-                key={claim.hash}
-                className="bg-gray-800 rounded p-3 text-sm space-y-1"
-              >
-                <p className="font-mono text-xs text-gray-300 break-all">
-                  {claim.hash}
-                </p>
-                <p className="text-gray-400">
-                  Owner:{" "}
-                  <span className="text-gray-300">
-                    {claim.owner.slice(0, 8)}...{claim.owner.slice(-6)}
-                  </span>{" "}
-                  | Block: <span className="text-gray-300">{claim.block}</span>
-                </p>
-                {claim.owner === account.address && (
-                  <button
-                    onClick={() => revokeClaim(claim.hash)}
-                    className="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-xs"
-                  >
-                    Revoke
-                  </button>
-                )}
-              </div>
-            ))}
+            {claims.map((claim) => {
+              const cid = hexHashToCid(claim.hash);
+              return (
+                <div
+                  key={claim.hash}
+                  className="bg-gray-800 rounded p-3 text-sm space-y-1"
+                >
+                  <p className="font-mono text-xs text-gray-300 break-all">
+                    {claim.hash}
+                  </p>
+                  <p className="text-gray-400">
+                    Owner:{" "}
+                    <span className="text-gray-300">
+                      {claim.owner.slice(0, 8)}...{claim.owner.slice(-6)}
+                    </span>{" "}
+                    | Block:{" "}
+                    <span className="text-gray-300">{claim.block}</span> |{" "}
+                    <a
+                      href={ipfsUrl(cid)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300 underline"
+                    >
+                      View on IPFS
+                    </a>
+                  </p>
+                  {claim.owner === account.address && (
+                    <button
+                      onClick={() => revokeClaim(claim.hash)}
+                      className="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-xs"
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

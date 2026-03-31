@@ -19,6 +19,7 @@
     "@polkadot-labs/hdkd": "^0.0.26",
     "@polkadot-labs/hdkd-helpers": "^0.0.27",
     "blakejs": "^1.2.1",
+    "multiformats": "^13.4.2",
     "polkadot-api": "^1.23.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

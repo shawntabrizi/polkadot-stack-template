@@ -1,11 +1,21 @@
 import { useState, useCallback, type DragEvent } from "react";
-import { hashFile } from "../utils/hash";
+import { hashFileWithBytes } from "../utils/hash";
 
 interface Props {
   onFileHashed: (hash: `0x${string}`, fileName: string) => void;
+  onFileBytes?: (bytes: Uint8Array) => void;
+  showUploadToggle?: boolean;
+  uploadToIpfs?: boolean;
+  onUploadToggle?: (enabled: boolean) => void;
 }
 
-export default function FileDropZone({ onFileHashed }: Props) {
+export default function FileDropZone({
+  onFileHashed,
+  onFileBytes,
+  showUploadToggle,
+  uploadToIpfs,
+  onUploadToggle,
+}: Props) {
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [hashing, setHashing] = useState(false);
@@ -15,13 +25,14 @@ export default function FileDropZone({ onFileHashed }: Props) {
       setFileName(file.name);
       setHashing(true);
       try {
-        const hash = await hashFile(file);
+        const { hash, bytes } = await hashFileWithBytes(file);
         onFileHashed(hash, file.name);
+        onFileBytes?.(bytes);
       } finally {
         setHashing(false);
       }
     },
-    [onFileHashed]
+    [onFileHashed, onFileBytes]
   );
 
   function handleDrop(e: DragEvent) {
@@ -42,36 +53,54 @@ export default function FileDropZone({ onFileHashed }: Props) {
   }
 
   return (
-    <div
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onDragLeave={() => setDragging(false)}
-      className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
-        dragging
-          ? "border-pink-500 bg-pink-500/10"
-          : "border-gray-700 hover:border-gray-500"
-      }`}
-    >
-      <input
-        type="file"
-        onChange={handleFileInput}
-        className="hidden"
-        id="file-input"
-      />
-      <label htmlFor="file-input" className="cursor-pointer">
-        {hashing ? (
-          <p className="text-yellow-400">Hashing...</p>
-        ) : fileName ? (
-          <p className="text-gray-300">
-            {fileName}{" "}
-            <span className="text-gray-500 text-sm">(drop another to replace)</span>
-          </p>
-        ) : (
-          <p className="text-gray-400">
-            Drop a file here or click to select
-          </p>
-        )}
-      </label>
+    <div className="space-y-2">
+      <div
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={() => setDragging(false)}
+        className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
+          dragging
+            ? "border-pink-500 bg-pink-500/10"
+            : "border-gray-700 hover:border-gray-500"
+        }`}
+      >
+        <input
+          type="file"
+          onChange={handleFileInput}
+          className="hidden"
+          id="file-input"
+        />
+        <label htmlFor="file-input" className="cursor-pointer">
+          {hashing ? (
+            <p className="text-yellow-400">Hashing...</p>
+          ) : fileName ? (
+            <p className="text-gray-300">
+              {fileName}{" "}
+              <span className="text-gray-500 text-sm">
+                (drop another to replace)
+              </span>
+            </p>
+          ) : (
+            <p className="text-gray-400">
+              Drop a file here or click to select
+            </p>
+          )}
+        </label>
+      </div>
+      {showUploadToggle && (
+        <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={uploadToIpfs ?? false}
+            onChange={(e) => onUploadToggle?.(e.target.checked)}
+            className="rounded border-gray-600"
+          />
+          Upload file to IPFS (via Bulletin Chain)
+          <span className="text-gray-600 text-xs">
+            — requires authorization, expires ~7 days
+          </span>
+        </label>
+      )}
     </div>
   );
 }

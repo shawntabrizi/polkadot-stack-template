@@ -6,7 +6,13 @@ import {
   getPublicClient,
   getWalletClient,
 } from "../config/evm";
+import { devAccounts } from "../hooks/useAccount";
 import FileDropZone from "./FileDropZone";
+import { hexHashToCid, ipfsUrl } from "../utils/cid";
+import {
+  uploadToBulletin,
+  checkBulletinAuthorization,
+} from "../hooks/useBulletin";
 
 interface Props {
   title: string;
@@ -46,11 +52,12 @@ export default function ContractProofOfExistencePage({
   );
   const [selectedAccount, setSelectedAccount] = useState(0);
   const [fileHash, setFileHash] = useState<`0x${string}` | null>(null);
+  const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
+  const [uploadToIpfs, setUploadToIpfs] = useState(false);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [txStatus, setTxStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Load claims on mount when contract address is available
   useEffect(() => {
     if (contractAddress) {
       loadClaims();
@@ -64,6 +71,10 @@ export default function ContractProofOfExistencePage({
 
   const onFileHashed = useCallback((hash: `0x${string}`) => {
     setFileHash(hash);
+  }, []);
+
+  const onFileBytes = useCallback((bytes: Uint8Array) => {
+    setFileBytes(bytes);
   }, []);
 
   async function loadClaims() {
@@ -112,7 +123,29 @@ export default function ContractProofOfExistencePage({
       return;
     }
     try {
-      setTxStatus("Submitting createClaim...");
+      // Optional: upload to Bulletin Chain first (using Substrate signer)
+      if (uploadToIpfs && fileBytes) {
+        const substrateSigner = devAccounts[selectedAccount].signer;
+        const substrateAddress = devAccounts[selectedAccount].address;
+
+        setTxStatus("Checking Bulletin Chain authorization...");
+        const authorized = await checkBulletinAuthorization(
+          substrateAddress,
+          fileBytes.length
+        );
+        if (!authorized) {
+          setTxStatus(
+            "Error: Not authorized to upload to Bulletin Chain. Authorization is required via chain governance."
+          );
+          return;
+        }
+        setTxStatus("Uploading to Bulletin Chain (IPFS)...");
+        await uploadToBulletin(fileBytes, substrateSigner);
+        setTxStatus("Upload complete. Submitting claim...");
+      } else {
+        setTxStatus("Submitting createClaim...");
+      }
+
       const walletClient = await getWalletClient(selectedAccount);
       const hash = await walletClient.writeContract({
         address: contractAddress as Address,
@@ -125,6 +158,7 @@ export default function ContractProofOfExistencePage({
       await publicClient.waitForTransactionReceipt({ hash });
       setTxStatus("Claim created!");
       setFileHash(null);
+      setFileBytes(null);
       loadClaims();
     } catch (e) {
       console.error("Transaction failed:", e);
@@ -192,7 +226,13 @@ export default function ContractProofOfExistencePage({
           </select>
         </div>
 
-        <FileDropZone onFileHashed={onFileHashed} />
+        <FileDropZone
+          onFileHashed={onFileHashed}
+          onFileBytes={onFileBytes}
+          showUploadToggle={true}
+          uploadToIpfs={uploadToIpfs}
+          onUploadToggle={setUploadToIpfs}
+        />
 
         {fileHash && (
           <div className="space-y-2">
@@ -238,34 +278,47 @@ export default function ContractProofOfExistencePage({
           </p>
         ) : (
           <div className="space-y-2">
-            {claims.map((claim) => (
-              <div
-                key={claim.hash}
-                className="bg-gray-800 rounded p-3 text-sm space-y-1"
-              >
-                <p className="font-mono text-xs text-gray-300 break-all">
-                  {claim.hash}
-                </p>
-                <p className="text-gray-400">
-                  Owner:{" "}
-                  <span className="text-gray-300">
-                    {claim.owner.slice(0, 8)}...{claim.owner.slice(-4)}
-                  </span>{" "}
-                  | Block:{" "}
-                  <span className="text-gray-300">
-                    {claim.block.toString()}
-                  </span>
-                </p>
-                {claim.owner.toLowerCase() === currentAddress.toLowerCase() && (
-                  <button
-                    onClick={() => revokeClaim(claim.hash)}
-                    className="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-xs"
-                  >
-                    Revoke
-                  </button>
-                )}
-              </div>
-            ))}
+            {claims.map((claim) => {
+              const cid = hexHashToCid(claim.hash);
+              return (
+                <div
+                  key={claim.hash}
+                  className="bg-gray-800 rounded p-3 text-sm space-y-1"
+                >
+                  <p className="font-mono text-xs text-gray-300 break-all">
+                    {claim.hash}
+                  </p>
+                  <p className="text-gray-400">
+                    Owner:{" "}
+                    <span className="text-gray-300">
+                      {claim.owner.slice(0, 8)}...{claim.owner.slice(-4)}
+                    </span>{" "}
+                    | Block:{" "}
+                    <span className="text-gray-300">
+                      {claim.block.toString()}
+                    </span>{" "}
+                    |{" "}
+                    <a
+                      href={ipfsUrl(cid)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300 underline"
+                    >
+                      View on IPFS
+                    </a>
+                  </p>
+                  {claim.owner.toLowerCase() ===
+                    currentAddress.toLowerCase() && (
+                    <button
+                      onClick={() => revokeClaim(claim.hash)}
+                      className="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-xs"
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
