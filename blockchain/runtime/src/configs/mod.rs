@@ -263,7 +263,6 @@ impl pallet_collator_selection::Config for Runtime {
 
 /// Configure the template proof-of-existence pallet.
 impl pallet_template::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
 	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
 }
 

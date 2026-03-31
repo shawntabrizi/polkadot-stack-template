@@ -50,6 +50,10 @@ pub enum ContractAction {
         /// Signer: dev name (alice/bob/charlie) or 0x private key
         #[arg(long, short, default_value = "alice")]
         signer: String,
+        /// Optional Substrate signer for Bulletin Chain uploads.
+        /// Required when using --upload with a raw Ethereum private key.
+        #[arg(long)]
+        bulletin_signer: Option<String>,
     },
     /// Revoke a proof-of-existence claim
     RevokeClaim {
@@ -84,6 +88,27 @@ fn resolve_signer(name: &str) -> Result<PrivateKeySigner, Box<dyn std::error::Er
     Ok(key.parse()?)
 }
 
+fn resolve_bulletin_signer(
+    contract_signer: &str,
+    bulletin_signer: Option<&str>,
+) -> Result<subxt_signer::sr25519::Keypair, Box<dyn std::error::Error>> {
+    if let Some(input) = bulletin_signer {
+        return resolve_substrate_signer(input);
+    }
+
+    if matches!(
+        contract_signer.to_lowercase().as_str(),
+        "alice" | "bob" | "charlie" | "dave" | "eve" | "ferdie"
+    ) {
+        return resolve_substrate_signer(contract_signer);
+    }
+
+    Err(
+        "--upload needs a Substrate signer for the Bulletin Chain. Re-run with --bulletin-signer alice (or a mnemonic / 0x secret seed)."
+            .into(),
+    )
+}
+
 fn parse_hash(hex_str: &str) -> Result<FixedBytes<32>, Box<dyn std::error::Error>> {
     Ok(hex_str.parse()?)
 }
@@ -113,7 +138,7 @@ fn get_contract_address(
     };
     let addr_str = addr.ok_or_else(|| -> Box<dyn std::error::Error> {
         format!(
-            "{} contract not deployed. Run: cd contracts/{} && npm run deploy:local",
+            "{} contract not deployed. Run: cd contracts/{} && npm run deploy:local (local dev) or npm run deploy:testnet (testnet).",
             contract_type.to_uppercase(),
             contract_type
         )
@@ -157,13 +182,14 @@ pub async fn run(
             file,
             upload,
             signer,
+            bulletin_signer,
         } => {
             let (hash_hex, file_bytes) = hash_input(hash, file.as_deref())?;
 
             if upload {
                 let bytes = file_bytes.ok_or("--upload requires --file")?;
-                // Use Substrate signer for Bulletin Chain (maps dev names to sr25519 keys)
-                let substrate_signer = resolve_substrate_signer(&signer)?;
+                let substrate_signer =
+                    resolve_bulletin_signer(&signer, bulletin_signer.as_deref())?;
                 crate::commands::upload_to_bulletin(&bytes, &substrate_signer).await?;
             }
 

@@ -6,6 +6,8 @@ This guide covers deploying the frontend, smart contracts, and parachain runtime
 
 The frontend is a static Vite app that works on any hosting platform. It uses hash-based routing (`HashRouter`) and relative asset paths (`base: "./"`) so it works correctly on IPFS gateways, GitHub Pages, and subdirectory deployments without configuration.
 
+The app now exposes both the Substrate WebSocket endpoint and the Ethereum JSON-RPC endpoint on the home page. On `localhost` it defaults to local dev URLs; on hosted deployments it defaults to Polkadot Hub TestNet. You can also set build-time defaults with `VITE_WS_URL` and `VITE_ETH_RPC_URL` (see `web/.env.example`).
+
 ### GitHub Pages
 
 The simplest option for public demos.
@@ -34,18 +36,19 @@ Deploys the frontend to IPFS and registers a `.dot` domain that resolves to it v
 
 **How it works:**
 
-The workflow at `.github/workflows/deploy-frontend.yml` runs on push to `main`/`master`. It:
+The workflow at `.github/workflows/deploy-frontend.yml` is manual on purpose. It:
 
 1. Builds the frontend
 2. Uploads to IPFS
 3. Registers/updates the DotNS domain via `paritytech/dotns-sdk`
 
-The domain is set by the `basename` field in the workflow (default: `polkadot-stack-template00`). Domain registration is automatic (`register-base: true`). PR pushes create preview deployments under a `dev-` prefix.
+The domain basename is entered when you dispatch the workflow. Domain registration is automatic (`register-base: true`).
 
 **Configuration:**
 
-- To use a custom domain, change `basename` in `.github/workflows/deploy-frontend.yml`
-- For production deployments, set the `DOTNS_MNEMONIC` secret in your repo settings. The workflow falls back to the dev mnemonic for testing.
+- Set the `DOTNS_MNEMONIC` secret in your repo settings before running the workflow
+- Open **Actions > Deploy Frontend to DotNS > Run workflow**
+- Enter the DotNS basename you want to register or update
 
 **Local IPFS deployment:**
 
@@ -61,7 +64,7 @@ w3 space create polkadot-stack-template
 ./scripts/deploy-frontend.sh
 ```
 
-This builds the frontend, uploads to IPFS, and prints the gateway URL.
+This builds the frontend, uploads to IPFS, and prints the gateway URL plus the DotNS follow-up steps.
 
 ### Other platforms
 
@@ -101,7 +104,7 @@ cd contracts/evm && npm install && npm run deploy:local
 cd contracts/pvm && npm install && npm run deploy:local
 ```
 
-Deploy scripts automatically write contract addresses to `deployments.json` (for CLI) and `web/src/config/deployments.ts` (for frontend). The frontend contract pages will auto-populate the address field.
+Deploy scripts automatically write contract addresses to `deployments.json` (for CLI) and `web/src/config/deployments.ts` (for frontend). The frontend contract pages auto-populate the address field from those shared files.
 
 ### Polkadot TestNet
 
@@ -174,6 +177,8 @@ cargo run -p stack-cli -- contract create-claim evm --file ./document.pdf --uplo
 
 The CLI connects to the Bulletin Chain via subxt and submits `TransactionStorage.store()`.
 
+For contract commands, `--upload` uses a Substrate signer for the Bulletin Chain and an Ethereum signer for the contract call. If you use a raw Ethereum private key with `--signer`, also pass `--bulletin-signer` explicitly.
+
 **Notes:**
 - Files expire after ~7 days unless renewed
 - Maximum 8 MiB per file
@@ -188,9 +193,14 @@ The CLI reads contract addresses from `deployments.json` in the project root. Af
 All write commands accept `--signer` (`-s`) which auto-detects the format:
 
 ```bash
+# Pallet commands
 --signer alice                              # dev account name
 --signer "bottom drive obey lake ..."       # mnemonic phrase
 --signer 0x5fb92d6e98884f76de468fa3f...     # raw secret seed
+
+# Contract commands
+--signer alice                              # dev account name
+--signer 0x5fb92d6e98884f76de468fa3f...     # raw Ethereum private key
 ```
 
 Default is `alice` if omitted.
@@ -215,6 +225,7 @@ cargo run -p stack-cli -- contract info
 cargo run -p stack-cli -- contract create-claim evm 0x0123...               # direct hash
 cargo run -p stack-cli -- contract create-claim evm --file ./doc.pdf        # hash a file
 cargo run -p stack-cli -- contract create-claim pvm --file ./doc.pdf --upload -s bob
+cargo run -p stack-cli -- contract create-claim evm --file ./doc.pdf --upload --signer 0x... --bulletin-signer alice
 cargo run -p stack-cli -- contract get-claim evm 0x0123...
 cargo run -p stack-cli -- contract revoke-claim pvm 0x0123... -s bob
 ```

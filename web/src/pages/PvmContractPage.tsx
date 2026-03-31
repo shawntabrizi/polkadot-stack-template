@@ -13,6 +13,7 @@ export default function PvmContractPage() {
           the eth-rpc proxy provides an identical interface.
         </>
       }
+      contractKind="pvm"
       accentColor="green"
       storageKey="pvm-contract-address"
       defaultAddress={deployments.pvm ?? undefined}

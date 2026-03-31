@@ -31,10 +31,6 @@ chain_data/
 # PAPI generated (committed so frontend works out of the box)
 # Regenerate with: cd web && npx papi update && npx papi
 
-# Contract deployments (auto-generated, local addresses)
-deployments.json
-web/src/config/deployments.ts
-
 # Hardhat
 contracts/*/cache/
 contracts/*/artifacts/

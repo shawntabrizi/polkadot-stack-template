@@ -18,14 +18,14 @@ echo "[1/2] Deploying ProofOfExistence via EVM (solc)..."
 cd "$ROOT_DIR/contracts/evm"
 npm install
 npx hardhat compile
-npx hardhat ignition deploy ./ignition/modules/ProofOfExistence.js --network polkadotTestnet
+npm run deploy:testnet
 
 # Deploy PVM contract (resolc)
 echo "[2/2] Deploying ProofOfExistence via PVM (resolc)..."
 cd "$ROOT_DIR/contracts/pvm"
 npm install
 npx hardhat compile
-npx hardhat ignition deploy ./ignition/modules/ProofOfExistence.js --network polkadotTestnet
+npm run deploy:testnet
 
 echo ""
 echo "=== Deployment complete ==="

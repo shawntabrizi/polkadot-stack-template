@@ -38,7 +38,6 @@ impl frame_system::Config for Test {
 }
 
 impl crate::Config for Test {
-	type RuntimeEvent = RuntimeEvent;
 	type WeightInfo = ();
 }
 

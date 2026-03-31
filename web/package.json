@@ -4,12 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "codegen": "papi",
+    "codegen": "papi generate",
     "update-types": "papi update",
     "dev": "vite",
-    "dev:blockchain": "papi update && vite",
-    "build": "papi && tsc -b && vite build",
-    "postinstall": "test -f src/config/deployments.ts || echo 'export const deployments: { evm: string | null; pvm: string | null } = { evm: null, pvm: null };' > src/config/deployments.ts; papi generate || true",
+    "dev:blockchain": "npm run update-types && vite",
+    "build": "npm run codegen && tsc -b && vite build",
+    "postinstall": "npm run codegen",
     "lint": "eslint .",
     "preview": "vite preview"
   },

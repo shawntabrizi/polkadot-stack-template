@@ -2,6 +2,13 @@
 
 This document describes all the parts of the Polkadot technology stack exposed by this template.
 
+## Required vs Optional
+
+- **Required for the smallest local demo**: Rust, `polkadot-omni-node`, the runtime, the pallet, and optionally the CLI.
+- **Required for contract examples**: add `eth-rpc`, `contracts/evm`, and/or `contracts/pvm`.
+- **Required for the web app**: add `web/` plus the committed PAPI descriptors in `web/.papi/`.
+- **Optional extras**: Bulletin Chain (IPFS uploads), Spektr host integration, and DotNS deployment. These are isolated so students can remove them without touching the core PoE flows.
+
 ## Polkadot SDK
 
 The foundation for the entire blockchain layer. Polkadot SDK provides FRAME (the pallet development framework), Cumulus (parachain support), and all the runtime primitives.
@@ -52,7 +59,7 @@ The Polkadot Bulletin Chain is a system chain that provides on-chain data storag
 - **Data expiry**: ~7 days (100,800 blocks) unless renewed
 - **Max file size**: 8 MiB per transaction
 - **Used for**: Optional IPFS upload of files before claiming their hash on-chain
-- **Source**: [`web/src/hooks/useBulletin.ts`](web/src/hooks/useBulletin.ts)
+- **Source**: [`web/src/hooks/useBulletin.ts`](web/src/hooks/useBulletin.ts), [`cli/src/commands/mod.rs`](cli/src/commands/mod.rs)
 
 ### Upload flow
 
@@ -68,12 +75,12 @@ DotNS provides `.dot` domain names that resolve to IPFS content, enabling human-
 - **Used for**: Frontend deployment to IPFS with a `.dot` domain
 - **CI Workflow**: `.github/workflows/deploy-frontend.yml` uses `paritytech/dotns-sdk`
 - **Domain registration**: Automatic via `register-base: true` in the workflow
-- **Preview deployments**: PR pushes create preview deployments under a `dev-` prefix
+- **Mode**: Manual workflow dispatch with an explicit `DOTNS_MNEMONIC` secret
 - **Docs**: [dotns.app](https://dotns.app)
 
 ### Deployment
 
-The GitHub Actions workflow builds the frontend, uploads to IPFS, and registers/updates the DotNS domain automatically. The local script (`scripts/deploy-frontend.sh`) uploads to IPFS via the `w3` CLI for testing.
+The GitHub Actions workflow builds the frontend, uploads to IPFS, and registers/updates the DotNS domain when you manually trigger it. The local script (`scripts/deploy-frontend.sh`) uploads to IPFS via the `w3` CLI and then prints the DotNS follow-up steps.
 
 ## PAPI (Polkadot API)
 
@@ -81,7 +88,7 @@ The JavaScript/TypeScript library for interacting with Substrate chains. PAPI pr
 
 - **Version**: v1.23.3
 - **Used for**: Frontend pallet interaction (create/revoke claims, query storage, block subscription)
-- **Descriptors**: Auto-generated from the running chain via `npx papi update`
+- **Descriptors**: Stored in `web/.papi/`, regenerated from a running chain via `npm run update-types`
 - **Source**: [`web/src/hooks/useChain.ts`](web/src/hooks/useChain.ts), [`web/src/hooks/useConnection.ts`](web/src/hooks/useConnection.ts)
 - **Docs**: [papi.how](https://papi.how/)
 
@@ -101,7 +108,7 @@ const result = await api.tx.TemplatePallet.create_claim({
 }).signAndSubmit(signer);
 ```
 
-Also used for Bulletin Chain interaction via a separate client with the `bulletin` descriptor.
+Also used for Bulletin Chain interaction via a separate client with the `bulletin` descriptor. The repo now fails fast if `papi generate` fails, which makes descriptor drift easier for students and AI agents to diagnose.
 
 ## subxt
 
@@ -162,6 +169,8 @@ The JavaScript library for interacting with Ethereum-compatible chains. Used by 
 - **Source**: [`web/src/config/evm.ts`](web/src/config/evm.ts), [`web/src/components/ContractProofOfExistencePage.tsx`](web/src/components/ContractProofOfExistencePage.tsx)
 - **Docs**: [viem.sh](https://viem.sh)
 
+The frontend now exposes the Ethereum JSON-RPC endpoint on the home page, instead of hard-coding localhost. That keeps GitHub Pages/IPFS deployments usable against testnet contracts.
+
 ## Hardhat
 
 The Ethereum development framework used for compiling, testing, and deploying Solidity contracts to both EVM and PVM targets.
@@ -187,6 +196,8 @@ The Nova Sama Technologies SDK for building products that run inside the Polkado
 - **Package**: `@novasamatech/product-sdk`
 - **Used for**: Spektr account detection and injection on the Accounts page
 - **Source**: [`web/src/pages/AccountsPage.tsx`](web/src/pages/AccountsPage.tsx)
+
+This integration is optional. If you do not need host-injected wallets, you can remove the Accounts page without affecting the pallet or contract demos.
 
 ### Host detection
 
@@ -215,7 +226,7 @@ The Ethereum JSON-RPC adapter for pallet-revive. Translates standard Ethereum RP
 
 - **Version**: v0.12.0
 - **Used for**: Bridging Ethereum tooling (MetaMask, Hardhat, viem, alloy) to the parachain
-- **Endpoint**: `http://127.0.0.1:8545` (local dev)
+- **Endpoint**: `http://127.0.0.1:8545` (local dev) or `https://services.polkadothub-rpc.com/testnet` (Polkadot Hub TestNet)
 - **Download**: [polkadot-sdk releases](https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2512-3)
 
 ## Zombienet

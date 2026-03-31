@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { getDefaultEthRpcUrl, getDefaultWsUrl } from "../config/network";
 
 export interface PalletAvailability {
   templatePallet: boolean | null; // null = not checked yet
@@ -7,12 +8,14 @@ export interface PalletAvailability {
 
 interface ChainState {
   wsUrl: string;
+  ethRpcUrl: string;
   connected: boolean;
   blockNumber: number;
   selectedAccount: number;
   txStatus: string | null;
   pallets: PalletAvailability;
   setWsUrl: (url: string) => void;
+  setEthRpcUrl: (url: string) => void;
   setConnected: (connected: boolean) => void;
   setBlockNumber: (blockNumber: number) => void;
   setSelectedAccount: (index: number) => void;
@@ -20,10 +23,9 @@ interface ChainState {
   setPallets: (pallets: PalletAvailability) => void;
 }
 
-const DEFAULT_WS_URL = "ws://127.0.0.1:9944";
-
 export const useChainStore = create<ChainState>((set) => ({
-  wsUrl: localStorage.getItem("ws-url") || DEFAULT_WS_URL,
+  wsUrl: localStorage.getItem("ws-url") || getDefaultWsUrl(),
+  ethRpcUrl: localStorage.getItem("eth-rpc-url") || getDefaultEthRpcUrl(),
   connected: false,
   blockNumber: 0,
   selectedAccount: 0,
@@ -32,6 +34,10 @@ export const useChainStore = create<ChainState>((set) => ({
   setWsUrl: (wsUrl) => {
     localStorage.setItem("ws-url", wsUrl);
     set({ wsUrl });
+  },
+  setEthRpcUrl: (ethRpcUrl) => {
+    localStorage.setItem("eth-rpc-url", ethRpcUrl);
+    set({ ethRpcUrl });
   },
   setConnected: (connected) => set({ connected }),
   setBlockNumber: (blockNumber) => set({ blockNumber }),

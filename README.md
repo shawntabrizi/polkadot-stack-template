@@ -2,6 +2,8 @@
 
 A developer starter template demonstrating the full Polkadot technology stack through a **Proof of Existence** system — the same concept implemented as a Substrate pallet, a Solidity EVM contract, and a Solidity PVM contract. Drop a file, claim its hash on-chain, and optionally upload it to IPFS via the Bulletin Chain.
 
+Students do not need to use every part of this repo. The runtime, pallet, contracts, frontend, CLI, Bulletin integration, Spektr integration, and deployment workflows are intentionally separated so teams can keep only the slices they want.
+
 ## What's Inside
 
 ### Substrate Pallet
@@ -41,6 +43,7 @@ A React + Vite + TypeScript + Tailwind CSS frontend.
 - **Source**: [`web/`](web/)
 - **Pallet interaction**: [Polkadot API (PAPI)](https://papi.how/) with sr25519 dev accounts (Alice, Bob, Charlie)
 - **Contract interaction**: [viem](https://viem.sh/) through the eth-rpc proxy with Ethereum dev accounts
+- **Endpoints**: Configurable Substrate WS and Ethereum JSON-RPC endpoints, with local-dev defaults on `localhost` and testnet defaults on hosted deployments
 - **Bulletin Chain**: Optional IPFS upload via the Polkadot Bulletin Chain with clickable IPFS links
 - **Pages**: Home (connection + pallet detection), Pallet PoE, EVM PoE, PVM PoE, Accounts
 - **State management**: Zustand
@@ -51,10 +54,10 @@ A Rust CLI tool using [subxt](https://github.com/parity-tech/subxt) and [alloy](
 
 - **Source**: [`cli/`](cli/)
 - **Pallet commands**: `pallet create-claim [hash | --file path] [--upload] [-s signer]`, `revoke-claim`, `get-claim`, `list-claims`
-- **Contract commands**: `contract create-claim <evm|pvm> [hash | --file path] [--upload] [-s signer]`, `revoke-claim`, `get-claim`, `info`
+- **Contract commands**: `contract create-claim <evm|pvm> [hash | --file path] [--upload] [-s signer] [--bulletin-signer signer]`, `revoke-claim`, `get-claim`, `info`
 - **Chain commands**: `chain info`, `chain blocks`
-- **Signers**: `--signer` accepts dev names (alice/bob), mnemonic phrases, or 0x secret seeds
-- **Bulletin Chain**: `--upload` flag uploads files to IPFS via `TransactionStorage.store()`
+- **Signers**: Pallet commands accept dev names, mnemonic phrases, or 0x secret seeds. Contract commands accept dev names or 0x Ethereum private keys.
+- **Bulletin Chain**: `--upload` flag uploads files to IPFS via `TransactionStorage.store()`. When using a raw Ethereum private key for contract calls, also pass `--bulletin-signer` for the Substrate-side upload.
 
 ### Deployment
 
@@ -63,7 +66,7 @@ A Rust CLI tool using [subxt](https://github.com/parity-tech/subxt) and [alloy](
 - [`scripts/start-dev-with-contracts.sh`](scripts/start-dev-with-contracts.sh) - All of the above + compile and deploy both contracts
 - [`scripts/deploy-paseo.sh`](scripts/deploy-paseo.sh) - Deploy contracts to Polkadot TestNet
 - [`scripts/deploy-frontend.sh`](scripts/deploy-frontend.sh) - Deploy frontend to IPFS
-- [`.github/workflows/deploy-frontend.yml`](.github/workflows/deploy-frontend.yml) - CI deploy to IPFS + DotNS
+- [`.github/workflows/deploy-frontend.yml`](.github/workflows/deploy-frontend.yml) - Optional manual CI deploy to IPFS + DotNS
 - [`.github/workflows/deploy-github-pages.yml`](.github/workflows/deploy-github-pages.yml) - CI deploy to GitHub Pages
 - [`blockchain/Dockerfile`](blockchain/Dockerfile) - Docker image using polkadot-omni-node
 - [`blockchain/zombienet.toml`](blockchain/zombienet.toml) - Zombienet config for multi-node testing
@@ -73,7 +76,7 @@ A Rust CLI tool using [subxt](https://github.com/parity-tech/subxt) and [alloy](
 ### Prerequisites
 
 - **Rust** (stable, installed via [rustup](https://rustup.rs/))
-- **Node.js** v22.5+ and npm v10.9.0+
+- **Node.js** 22.x LTS (`22.5+` recommended) and npm v10.9.0+
 - **polkadot-omni-node** v1.21.3 ([download](https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2512-3))
 - **eth-rpc** v0.12.0 ([download](https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2512-3)) - Ethereum JSON-RPC adapter
 - **chain-spec-builder** (`cargo install staging-chain-spec-builder`)
@@ -108,6 +111,10 @@ cargo run -p stack-cli -- pallet create-claim --file ./README.md
 cargo run -p stack-cli -- pallet list-claims
 ```
 
+The frontend keeps `deployments.json` and `web/src/config/deployments.ts` as checked-in stubs. Deploy scripts update both files automatically after a successful contract deployment.
+
+If you want explicit build-time defaults for hosted frontends, copy [`web/.env.example`](web/.env.example) to `web/.env.local` and set `VITE_WS_URL` / `VITE_ETH_RPC_URL`.
+
 ### Deploy contracts
 
 ```bash
@@ -116,8 +123,8 @@ cd contracts/evm && npm install && npm run deploy:local
 cd contracts/pvm && npm install && npm run deploy:local
 
 # Deploy to Polkadot TestNet
-npx hardhat vars set PRIVATE_KEY  # in each contract dir
-npm run deploy:testnet
+cd contracts/evm && npx hardhat vars set PRIVATE_KEY && npm run deploy:testnet
+cd contracts/pvm && npx hardhat vars set PRIVATE_KEY && npm run deploy:testnet
 ```
 
 ### Run tests
@@ -159,6 +166,13 @@ polkadot-stack-template/
 - [TOOLS.md](TOOLS.md) - All Polkadot stack components used in this template
 - [DEPLOYMENT.md](DEPLOYMENT.md) - Deployment guide (GitHub Pages, DotNS, contracts, runtime)
 - [INSTALL.md](INSTALL.md) - Detailed setup instructions
+
+## Using Only What You Need
+
+- **Pallet only**: Keep [`blockchain/pallets/template/`](blockchain/pallets/template/), [`blockchain/runtime/`](blockchain/runtime/), and optionally [`cli/`](cli/). You can ignore `contracts/`, `web/src/components/ContractProofOfExistencePage.tsx`, and `eth-rpc`.
+- **Contracts only**: Keep [`contracts/`](contracts/) plus the `Revive` runtime wiring in [`blockchain/runtime/`](blockchain/runtime/). The pallet and Bulletin integration are optional.
+- **Frontend only**: The core PoE UI lives in [`web/src/pages/PalletPage.tsx`](web/src/pages/PalletPage.tsx), [`web/src/pages/EvmContractPage.tsx`](web/src/pages/EvmContractPage.tsx), and [`web/src/pages/PvmContractPage.tsx`](web/src/pages/PvmContractPage.tsx). The Accounts page, Spektr support, and Bulletin upload hook can be removed without affecting the basic claim flows.
+- **Optional integrations**: Bulletin Chain, Spektr, and DotNS are isolated extras. They are documented locally in [TOOLS.md](TOOLS.md) and can be skipped entirely for workshops or hackathons.
 
 ## Key Versions
 

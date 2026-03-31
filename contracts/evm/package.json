@@ -6,7 +6,7 @@
     "compile": "npx hardhat compile",
     "test": "npx hardhat test",
     "deploy:local": "npx hardhat run scripts/deploy.ts --network local",
-    "deploy:testnet": "npx hardhat ignition deploy ./ignition/modules/ProofOfExistence.js --network polkadotTestnet",
+    "deploy:testnet": "npx hardhat run scripts/deploy.ts --network polkadotTestnet",
     "verify": "npx hardhat verify --network polkadotTestnet"
   },
   "devDependencies": {

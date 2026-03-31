@@ -14,6 +14,7 @@ export default function EvmContractPage() {
           interaction.
         </>
       }
+      contractKind="evm"
       accentColor="purple"
       storageKey="evm-contract-address"
       defaultAddress={deployments.evm ?? undefined}

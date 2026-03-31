@@ -1,27 +1,51 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useChainStore } from "../store/chainStore";
 import { useConnection } from "../hooks/useConnection";
+import { getClient } from "../hooks/useChain";
+import {
+  getNetworkPresetEndpoints,
+  type NetworkPreset,
+} from "../config/network";
 
 export default function HomePage() {
-  const { wsUrl, setWsUrl, connected, blockNumber, pallets } = useChainStore();
+  const {
+    wsUrl,
+    ethRpcUrl,
+    setWsUrl,
+    setEthRpcUrl,
+    connected,
+    blockNumber,
+    pallets,
+  } = useChainStore();
   const { connect } = useConnection();
   const [urlInput, setUrlInput] = useState(wsUrl);
+  const [ethRpcInput, setEthRpcInput] = useState(ethRpcUrl);
   const [error, setError] = useState<string | null>(null);
   const [chainName, setChainName] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
-  // Refresh chain name when connected
-  if (connected && !chainName && !connecting) {
-    import("../hooks/useChain").then(({ getClient }) => {
-      getClient(wsUrl)
-        .getChainSpecData()
-        .then((data) => setChainName(data.name))
-        .catch(() => {});
-    });
-  }
+  useEffect(() => {
+    setUrlInput(wsUrl);
+  }, [wsUrl]);
+
+  useEffect(() => {
+    setEthRpcInput(ethRpcUrl);
+  }, [ethRpcUrl]);
+
+  useEffect(() => {
+    if (!connected) {
+      return;
+    }
+
+    getClient(wsUrl)
+      .getChainSpecData()
+      .then((data) => setChainName(data.name))
+      .catch(() => {});
+  }, [connected, wsUrl]);
 
   async function handleConnect() {
     setWsUrl(urlInput);
+    setEthRpcUrl(ethRpcInput);
     setConnecting(true);
     setError(null);
     setChainName(null);
@@ -40,6 +64,12 @@ export default function HomePage() {
     }
   }
 
+  function applyPreset(preset: NetworkPreset) {
+    const endpoints = getNetworkPresetEndpoints(preset);
+    setUrlInput(endpoints.wsUrl);
+    setEthRpcInput(endpoints.ethRpcUrl);
+  }
+
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Polkadot Stack Template</h1>
@@ -51,9 +81,24 @@ export default function HomePage() {
       </p>
 
       <div className="bg-gray-900 rounded-lg p-5 border border-gray-800 space-y-4">
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => applyPreset("local")}
+            className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-sm text-gray-200"
+          >
+            Use Local Dev
+          </button>
+          <button
+            onClick={() => applyPreset("testnet")}
+            className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-sm text-gray-200"
+          >
+            Use Hub TestNet
+          </button>
+        </div>
+
         <div>
           <label className="text-sm text-gray-400 block mb-1">
-            WebSocket Endpoint
+            Substrate WebSocket Endpoint
           </label>
           <div className="flex gap-2">
             <input
@@ -74,7 +119,23 @@ export default function HomePage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label className="text-sm text-gray-400 block mb-1">
+            Ethereum JSON-RPC Endpoint
+          </label>
+          <input
+            type="text"
+            value={ethRpcInput}
+            onChange={(e) => setEthRpcInput(e.target.value)}
+            placeholder="http://127.0.0.1:8545"
+            className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white w-full font-mono text-sm"
+          />
+          <p className="text-xs text-gray-500 mt-2">
+            Used by the EVM and PVM contract pages.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <h3 className="text-sm font-medium text-gray-400 mb-1">
               Chain Status
@@ -102,6 +163,14 @@ export default function HomePage() {
               Latest Block
             </h3>
             <p className="text-xl font-bold font-mono">#{blockNumber}</p>
+          </div>
+          <div>
+            <h3 className="text-sm font-medium text-gray-400 mb-1">
+              Contract RPC
+            </h3>
+            <p className="text-sm font-mono text-gray-300 break-all">
+              {ethRpcUrl}
+            </p>
           </div>
         </div>
       </div>

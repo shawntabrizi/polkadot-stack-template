@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "=== Deploy Frontend to IPFS + DotNS ==="
+echo "=== Deploy Frontend to IPFS ==="
 echo ""
 
 # Build the frontend
@@ -41,8 +41,8 @@ fi
 echo "  IPFS CID: $CID"
 echo "  Gateway:  https://$CID.ipfs.w3s.link"
 
-# Register with DotNS
-echo "[3/3] To point your DotNS domain to this deployment:"
+# Optional DotNS follow-up
+echo "[3/3] Optional: point a DotNS domain to this deployment"
 echo ""
 echo "  Option A: Use the DotNS UI"
 echo "    1. Go to https://dotns.app"

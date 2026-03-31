@@ -13,10 +13,12 @@ import {
   uploadToBulletin,
   checkBulletinAuthorization,
 } from "../hooks/useBulletin";
+import { useChainStore } from "../store/chainStore";
 
 interface Props {
   title: string;
   description: ReactNode;
+  contractKind: "evm" | "pvm";
   accentColor: "purple" | "green";
   storageKey: string;
   defaultAddress?: string;
@@ -42,14 +44,15 @@ const colorMap = {
 export default function ContractProofOfExistencePage({
   title,
   description,
+  contractKind,
   accentColor,
   storageKey,
   defaultAddress,
 }: Props) {
   const colors = colorMap[accentColor];
-  const [contractAddress, setContractAddress] = useState(
-    () => localStorage.getItem(storageKey) || defaultAddress || ""
-  );
+  const ethRpcUrl = useChainStore((s) => s.ethRpcUrl);
+  const scopedStorageKey = `${storageKey}:${ethRpcUrl}`;
+  const [contractAddress, setContractAddress] = useState("");
   const [selectedAccount, setSelectedAccount] = useState(0);
   const [fileHash, setFileHash] = useState<`0x${string}` | null>(null);
   const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
@@ -60,14 +63,32 @@ export default function ContractProofOfExistencePage({
   const [ipfsAvailable, setIpfsAvailable] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
+    setContractAddress(localStorage.getItem(scopedStorageKey) || defaultAddress || "");
+  }, [defaultAddress, scopedStorageKey]);
+
+  useEffect(() => {
     if (contractAddress) {
       loadClaims();
+    } else {
+      setClaims([]);
+      setTxStatus(null);
     }
-  }, [contractAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [contractAddress, ethRpcUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function saveAddress(address: string) {
     setContractAddress(address);
-    localStorage.setItem(storageKey, address);
+    if (address) {
+      localStorage.setItem(scopedStorageKey, address);
+    } else {
+      localStorage.removeItem(scopedStorageKey);
+    }
+  }
+
+  function missingContractMessage() {
+    return [
+      `Error: No ${contractKind.toUpperCase()} contract was found at this address on ${ethRpcUrl}.`,
+      `Update the address or deploy one with: cd contracts/${contractKind} && npm run deploy:local (local dev) or npm run deploy:testnet (testnet).`,
+    ].join(" ");
   }
 
   const onFileHashed = useCallback((hash: `0x${string}`) => {
@@ -86,16 +107,14 @@ export default function ContractProofOfExistencePage({
     try {
       setLoading(true);
       setTxStatus(null);
-      const client = getPublicClient();
+      const client = getPublicClient(ethRpcUrl);
       const addr = contractAddress as Address;
 
       // Check if contract is actually deployed at this address
       const code = await client.getCode({ address: addr });
       if (!code || code === "0x") {
         setClaims([]);
-        setTxStatus(
-          "Error: No contract deployed at this address. Deploy with: cd contracts/evm && npm run deploy:local"
-        );
+        setTxStatus(missingContractMessage());
         return;
       }
 
@@ -144,12 +163,10 @@ export default function ContractProofOfExistencePage({
       return;
     }
     try {
-      const client = getPublicClient();
+      const client = getPublicClient(ethRpcUrl);
       const code = await client.getCode({ address: contractAddress as Address });
       if (!code || code === "0x") {
-        setTxStatus(
-          "Error: No contract deployed at this address. Deploy with: cd contracts/evm && npm run deploy:local"
-        );
+        setTxStatus(missingContractMessage());
         return;
       }
       // Optional: upload to Bulletin Chain first (using Substrate signer)
@@ -175,7 +192,7 @@ export default function ContractProofOfExistencePage({
         setTxStatus("Submitting createClaim...");
       }
 
-      const walletClient = await getWalletClient(selectedAccount);
+      const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
       const hash = await walletClient.writeContract({
         address: contractAddress as Address,
         abi: proofOfExistenceAbi,
@@ -183,7 +200,7 @@ export default function ContractProofOfExistencePage({
         args: [fileHash],
       });
       setTxStatus(`Transaction submitted: ${hash}`);
-      const publicClient = getPublicClient();
+      const publicClient = getPublicClient(ethRpcUrl);
       await publicClient.waitForTransactionReceipt({ hash });
       setTxStatus("Claim created!");
       setFileHash(null);
@@ -198,16 +215,14 @@ export default function ContractProofOfExistencePage({
   async function revokeClaim(documentHash: `0x${string}`) {
     if (!contractAddress) return;
     try {
-      const client = getPublicClient();
+      const client = getPublicClient(ethRpcUrl);
       const code = await client.getCode({ address: contractAddress as Address });
       if (!code || code === "0x") {
-        setTxStatus(
-          "Error: No contract deployed at this address. Deploy with: cd contracts/evm && npm run deploy:local"
-        );
+        setTxStatus(missingContractMessage());
         return;
       }
       setTxStatus("Submitting revokeClaim...");
-      const walletClient = await getWalletClient(selectedAccount);
+      const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
       const hash = await walletClient.writeContract({
         address: contractAddress as Address,
         abi: proofOfExistenceAbi,
@@ -215,7 +230,7 @@ export default function ContractProofOfExistencePage({
         args: [documentHash],
       });
       setTxStatus(`Transaction submitted: ${hash}`);
-      const publicClient = getPublicClient();
+      const publicClient = getPublicClient(ethRpcUrl);
       await publicClient.waitForTransactionReceipt({ hash });
       setTxStatus("Claim revoked!");
       loadClaims();

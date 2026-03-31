@@ -18,8 +18,10 @@ The project pins Rust stable via `rust-toolchain.toml`. The WASM compilation tar
 
 Required for the Solidity contracts (Hardhat) and the frontend (Vite + React).
 
-- **Node.js**: v22.5 or later (required for PVM/resolc compatibility)
+- **Node.js**: 22.x LTS (`22.5+` recommended inside the 22.x line)
 - **npm**: v10.9.0 or later
+
+> Use Node 22 for the smoothest experience. Newer majors such as Node 25 currently trigger Hardhat compatibility warnings.
 
 Install via [nvm](https://github.com/nvm-sh/nvm) (recommended) or [nodejs.org](https://nodejs.org/).
 
@@ -153,6 +155,8 @@ cd web
 npm install
 ```
 
+The repo keeps `web/src/config/deployments.ts` as a checked-in stub so the frontend works in a fresh clone. Contract deploy scripts update that file and the root `deployments.json` automatically.
+
 ## Running Locally
 
 ### Quick Start
@@ -193,7 +197,7 @@ cargo run -p stack-cli -- pallet list-claims
 cargo run -p stack-cli -- contract create-claim evm --file ./README.md
 ```
 
-> Note: The CLI is excluded from the main workspace to avoid dependency conflicts. Build it separately with `cd cli && cargo build`.
+The CLI is part of the Rust workspace, so `cargo run -p stack-cli -- ...` works from the repo root.
 
 ## Deploying to Polkadot TestNet
 
@@ -215,12 +219,14 @@ cd contracts/pvm && npx hardhat vars set PRIVATE_KEY
 ```bash
 # EVM
 cd contracts/evm
-npx hardhat ignition deploy ./ignition/modules/ProofOfExistence.js --network polkadotTestnet
+npm run deploy:testnet
 
 # PVM
 cd contracts/pvm
-npx hardhat ignition deploy ./ignition/modules/ProofOfExistence.js --network polkadotTestnet
+npm run deploy:testnet
 ```
+
+Both commands update `deployments.json` and `web/src/config/deployments.ts` so the CLI and frontend stay in sync.
 
 ### Verify on Blockscout
 
@@ -258,3 +264,13 @@ The `[patch.crates-io]` section in `Cargo.toml` pins `pallet-revive-proc-macro` 
 ### TypeScript moduleResolution error in Hardhat
 
 Each contract directory has a `tsconfig.json` that avoids the TypeScript 7.0 deprecation. Make sure you're using the `tsconfig.json` in the contract directory, not a global one.
+
+### Frontend builds but uses stale chain types
+
+The frontend now fails fast if PAPI code generation fails. Regenerate the metadata and descriptors against a running chain:
+
+```bash
+cd web
+npm run update-types
+npm run codegen
+```

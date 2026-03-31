@@ -6,8 +6,7 @@ import {
   type Chain,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-
-const ETH_RPC_URL = "http://127.0.0.1:8545";
+import { getStoredEthRpcUrl } from "./network";
 
 // ProofOfExistence contract ABI — same for both EVM (solc) and PVM (resolc) deployments
 export const proofOfExistenceAbi = [
@@ -74,36 +73,49 @@ export const evmDevAccounts = [
 ];
 
 let publicClient: ReturnType<typeof createPublicClient> | null = null;
+let publicClientUrl: string | null = null;
 let chainCache: Chain | null = null;
+let chainCacheUrl: string | null = null;
 
-export function getPublicClient() {
-  if (!publicClient) {
+function isLocalEthRpcUrl(url: string) {
+  return url.includes("127.0.0.1") || url.includes("localhost");
+}
+
+export function getPublicClient(ethRpcUrl = getStoredEthRpcUrl()) {
+  if (!publicClient || publicClientUrl !== ethRpcUrl) {
     publicClient = createPublicClient({
-      transport: http(ETH_RPC_URL),
+      transport: http(ethRpcUrl),
     });
+    publicClientUrl = ethRpcUrl;
   }
   return publicClient;
 }
 
-async function getChain(): Promise<Chain> {
-  if (!chainCache) {
-    const client = getPublicClient();
+async function getChain(ethRpcUrl = getStoredEthRpcUrl()): Promise<Chain> {
+  if (!chainCache || chainCacheUrl !== ethRpcUrl) {
+    const client = getPublicClient(ethRpcUrl);
     const chainId = await client.getChainId();
     chainCache = defineChain({
       id: chainId,
-      name: "Local Parachain",
+      name: isLocalEthRpcUrl(ethRpcUrl)
+        ? "Local Parachain"
+        : "Polkadot Hub TestNet",
       nativeCurrency: { name: "Unit", symbol: "UNIT", decimals: 18 },
-      rpcUrls: { default: { http: [ETH_RPC_URL] } },
+      rpcUrls: { default: { http: [ethRpcUrl] } },
     });
+    chainCacheUrl = ethRpcUrl;
   }
   return chainCache;
 }
 
-export async function getWalletClient(accountIndex: number) {
-  const chain = await getChain();
+export async function getWalletClient(
+  accountIndex: number,
+  ethRpcUrl = getStoredEthRpcUrl()
+) {
+  const chain = await getChain(ethRpcUrl);
   return createWalletClient({
     account: evmDevAccounts[accountIndex].account,
     chain,
-    transport: http(ETH_RPC_URL),
+    transport: http(ethRpcUrl),
   });
 }

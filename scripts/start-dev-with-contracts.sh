@@ -3,6 +3,22 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+NODE_PID=""
+ETH_RPC_PID=""
+
+cleanup() {
+    echo ""
+    echo "Shutting down..."
+    if [ -n "$ETH_RPC_PID" ]; then
+        kill "$ETH_RPC_PID" 2>/dev/null || true
+        wait "$ETH_RPC_PID" 2>/dev/null || true
+    fi
+    if [ -n "$NODE_PID" ]; then
+        kill "$NODE_PID" 2>/dev/null || true
+        wait "$NODE_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
 
 echo "=== Polkadot Stack Template - Local Dev with Contracts ==="
 echo ""
@@ -57,23 +73,13 @@ echo "  Ethereum RPC ready (http://127.0.0.1:8545)"
 echo "[5/5] Deploying contracts..."
 echo "  Deploying ProofOfExistence via EVM (solc)..."
 cd "$ROOT_DIR/contracts/evm"
-npx hardhat run scripts/deploy.ts --network local 2>&1 || echo "  (EVM deploy failed)"
+npm run deploy:local
 
 echo "  Deploying ProofOfExistence via PVM (resolc)..."
 cd "$ROOT_DIR/contracts/pvm"
-npx hardhat run scripts/deploy.ts --network localNode 2>&1 || echo "  (PVM deploy failed)"
+npm run deploy:local
 
 cd "$ROOT_DIR"
-
-cleanup() {
-    echo ""
-    echo "Shutting down..."
-    kill $ETH_RPC_PID 2>/dev/null
-    kill $NODE_PID 2>/dev/null
-    wait $ETH_RPC_PID 2>/dev/null
-    wait $NODE_PID 2>/dev/null
-}
-trap cleanup EXIT INT TERM
 
 echo ""
 echo "=== Dev environment running ==="
