@@ -9,7 +9,7 @@ const config: HardhatUserConfig = {
     version: "1.0.0",
   },
   networks: {
-    localNode: {
+    local: {
       // Local node Ethereum RPC endpoint (via eth-rpc adapter)
       url: "http://127.0.0.1:8545",
       accounts: [

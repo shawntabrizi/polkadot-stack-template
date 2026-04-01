@@ -1,11 +1,11 @@
-version: "3.8"
-
 services:
   node:
     image: stack-template-node:latest
     build:
       context: .
       dockerfile: Dockerfile
+      # The Docker image copies blockchain/chain_spec.json at build time.
+      # Regenerate that file locally after runtime changes before rebuilding.
     ports:
       - "9944:9944"
       - "30333:30333"

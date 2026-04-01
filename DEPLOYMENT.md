@@ -145,6 +145,13 @@ cd blockchain
 docker compose up
 ```
 
+The Docker image copies [`blockchain/chain_spec.json`](blockchain/chain_spec.json) at build time. If you change the runtime, regenerate the chain spec first so the container does not boot with a stale file:
+
+```bash
+./scripts/start-dev.sh
+# or run the build + chain-spec-builder steps from INSTALL.md manually
+```
+
 ### Zombienet (multi-node)
 
 ```bash

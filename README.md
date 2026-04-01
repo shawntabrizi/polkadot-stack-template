@@ -83,7 +83,7 @@ A Rust CLI tool using [subxt](https://github.com/parity-tech/subxt) and [alloy](
 
 See [INSTALL.md](INSTALL.md) for detailed setup instructions.
 
-The repo includes [`.nvmrc`](/Users/shawntabrizi/Documents/GitHub/polkadot-stack-template/.nvmrc) and `engines` fields in the JavaScript projects to keep everyone on the same Node major version.
+The repo includes [`.nvmrc`](.nvmrc) and `engines` fields in the JavaScript projects to keep everyone on the same Node major version.
 
 ### Run locally
 
