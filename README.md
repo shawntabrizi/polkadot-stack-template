@@ -142,9 +142,12 @@ cargo test -p pallet-template
 # All tests including benchmarks
 SKIP_PALLET_REVIVE_FIXTURES=1 cargo test --workspace --features runtime-benchmarks
 
-# Statement Store runtime + CLI smoke harness
+# Statement Store runtime + CLI coverage
 cargo test -p stack-template-runtime
 cargo test -p stack-cli
+
+# End-to-end local node smoke test
+./scripts/test-statement-store-smoke.sh
 
 # Solidity tests (local Hardhat network)
 cd contracts/evm && npx hardhat test

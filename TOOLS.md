@@ -32,7 +32,11 @@ Statement Store is an omni-node feature for validating, storing, and gossiping s
 
 The local scripts intentionally do not use `--dev` for omni-node. On the `polkadot-omni-node` release paired with `stable2512-3`, Statement Store RPCs are exposed when using the explicit local-authority flags (`--tmp --alice --force-authoring`) but not when using `--dev`.
 
-The current template integration is intentionally generic. It enables the runtime and node plumbing without yet wiring Statement Store into the Proof of Existence pallet, the frontend, or Bulletin upload flows.
+The current template integration is active in all three local entry points:
+
+- CLI: signed submission and dump flows via `stack-cli chain statement-submit` / `statement-dump`
+- Frontend: optional Statement Store submission on the pallet and contract claim pages
+- Scripts: [`scripts/test-statement-store-smoke.sh`](scripts/test-statement-store-smoke.sh) runs an end-to-end local-node submission and dump check
 
 ## pallet-revive (EVM + PVM)
 
