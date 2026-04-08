@@ -264,6 +264,7 @@ start_eth_rpc_background() {
     eth-rpc \
         --node-rpc-url "$SUBSTRATE_RPC_WS" \
         --no-prometheus \
+        --rpc-cors all \
         -d "$eth_rpc_dir" >"$eth_rpc_log" 2>&1 &
     ETH_RPC_PID=$!
 
