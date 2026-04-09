@@ -39,7 +39,6 @@ pub mod pallet {
 	/// Configuration trait for this pallet.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		/// The overarching runtime event type.
 		/// A type representing the weights required by the dispatchables of this pallet.
 		type WeightInfo: WeightInfo;
 	}
