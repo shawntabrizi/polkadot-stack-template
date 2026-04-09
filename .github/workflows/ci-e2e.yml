@@ -1,0 +1,77 @@
+name: CI — E2E Tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "blockchain/**"
+      - "cli/**"
+      - "contracts/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/ci-e2e.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "blockchain/**"
+      - "cli/**"
+      - "contracts/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/ci-e2e.yml"
+
+concurrency:
+  group: ci-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # polkadot-sdk release tag — all binaries must match this version.
+  SDK_RELEASE: polkadot-stable2512-3
+
+jobs:
+  e2e:
+    name: Zombienet E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: e2e-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Download pre-built polkadot-sdk binaries from the GitHub release.
+      # polkadot needs its execute-worker and prepare-worker in PATH.
+      - name: Install polkadot-sdk binaries
+        run: |
+          BASE="https://github.com/paritytech/polkadot-sdk/releases/download/$SDK_RELEASE"
+          for bin in polkadot polkadot-execute-worker polkadot-prepare-worker polkadot-omni-node eth-rpc chain-spec-builder; do
+            curl -sL "$BASE/$bin" -o "/usr/local/bin/$bin"
+            chmod +x "/usr/local/bin/$bin"
+          done
+          polkadot --version
+          polkadot-omni-node --version
+          eth-rpc --version
+
+      - name: Install zombienet
+        run: npm install -g @zombienet/cli
+
+      - name: Install contract dependencies
+        run: |
+          cd contracts/evm && npm ci
+          cd "$GITHUB_WORKSPACE/contracts/pvm" && npm ci
+
+      - name: Run E2E tests
+        run: ./scripts/test-zombienet.sh

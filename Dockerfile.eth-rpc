@@ -8,6 +8,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && curl -sL "https://github.com/paritytech/polkadot-sdk/releases/download/${ETH_RPC_VERSION}/eth-rpc" \
        -o /usr/local/bin/eth-rpc \
+    && curl -sL "https://github.com/paritytech/polkadot-sdk/releases/download/${ETH_RPC_VERSION}/eth-rpc.sha256" \
+       -o /tmp/eth-rpc.sha256 \
+    && cd /usr/local/bin && sha256sum -c /tmp/eth-rpc.sha256 \
     && chmod +x /usr/local/bin/eth-rpc \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /tmp/eth-rpc.sha256
 ENTRYPOINT ["eth-rpc"]
