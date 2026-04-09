@@ -252,7 +252,8 @@ wait_for_substrate_rpc() {
     startup_log="$(startup_log_path)"
 
     log_info "Waiting for local node RPCs..."
-    for _ in $(seq 1 120); do
+    local max_wait="${STACK_RPC_TIMEOUT:-180}"
+    for _ in $(seq 1 "$max_wait"); do
         if [ -n "$NODE_PID" ] && basic_substrate_rpc_ready && substrate_block_producing; then
             log_info "Node ready at $SUBSTRATE_RPC_WS"
             return 0

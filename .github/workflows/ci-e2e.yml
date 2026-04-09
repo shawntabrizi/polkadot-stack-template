@@ -74,4 +74,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/contracts/pvm" && npm ci
 
       - name: Run E2E tests
+        env:
+          # CI runners are slower — give Zombienet more time to start.
+          STACK_RPC_TIMEOUT: 300
         run: ./scripts/test-zombienet.sh
