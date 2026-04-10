@@ -46,8 +46,8 @@ fn value_to_bytes32<T>(val: &subxt::dynamic::Value<T>) -> Option<[u8; 32]> {
 	// Unwrap the outer composite wrapper to get the inner byte array
 	let inner = val.at(0)?;
 	let mut bytes = [0u8; 32];
-	for i in 0..32 {
-		bytes[i] = inner.at(i).and_then(|v| v.as_u128()).map(|n| n as u8)?;
+	for (i, byte) in bytes.iter_mut().enumerate() {
+		*byte = inner.at(i).and_then(|v| v.as_u128()).map(|n| n as u8)?;
 	}
 	Some(bytes)
 }
