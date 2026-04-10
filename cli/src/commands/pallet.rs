@@ -1,5 +1,6 @@
 use crate::commands::{hash_input, parse_h256, resolve_statement_signer, resolve_substrate_signer};
 use clap::Subcommand;
+use sp_core::crypto::AccountId32;
 use subxt::{dynamic::At, OnlineClient, PolkadotConfig};
 
 #[derive(Subcommand)]
@@ -39,13 +40,29 @@ pub enum PalletAction {
 	ListClaims,
 }
 
+/// Extract a 32-byte array from a subxt dynamic Value.
+/// Handles the nested composite structure: Composite([Composite([u8; 32])]).
+fn value_to_bytes32<T>(val: &subxt::dynamic::Value<T>) -> Option<[u8; 32]> {
+	// Unwrap the outer composite wrapper to get the inner byte array
+	let inner = val.at(0)?;
+	let mut bytes = [0u8; 32];
+	for i in 0..32 {
+		bytes[i] = inner.at(i).and_then(|v| v.as_u128()).map(|n| n as u8)?;
+	}
+	Some(bytes)
+}
+
 /// Decode a claim from a subxt dynamic value into (owner, block_number) strings.
 /// Uses runtime metadata to decode — no hardcoded byte offsets.
 fn decode_claim(value: &subxt::dynamic::DecodedValueThunk) -> (String, String) {
 	let Ok(val) = value.to_value() else {
 		return ("?".to_string(), "?".to_string());
 	};
-	let owner = val.at("owner").map(|v| format!("{v}")).unwrap_or_else(|| "?".to_string());
+	let owner = val
+		.at("owner")
+		.and_then(value_to_bytes32)
+		.map(|bytes| AccountId32::new(bytes).to_string())
+		.unwrap_or_else(|| "?".to_string());
 	let block = val
 		.at("block_number")
 		.and_then(|v: &subxt::dynamic::Value<u32>| v.as_u128())
@@ -135,8 +152,12 @@ pub async fn run(action: PalletAction, url: &str) -> Result<(), Box<dyn std::err
 
 			let mut count = 0u32;
 			while let Some(Ok(kv)) = results.next().await {
-				let hash =
-					kv.keys.first().map(|k| format!("{k}")).unwrap_or_else(|| "?".to_string());
+				let hash = kv
+					.keys
+					.first()
+					.and_then(value_to_bytes32)
+					.map(|bytes| format!("0x{}", hex::encode(bytes)))
+					.unwrap_or_else(|| "?".to_string());
 				let (owner, block) = decode_claim(&kv.value);
 
 				println!("{:<68} {:<50} {}", hash, owner, block);
