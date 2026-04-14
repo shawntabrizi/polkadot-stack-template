@@ -68,8 +68,8 @@ export default function DexPage() {
 			report(
 				`Quote: ${swapAmount} ${ASSETS[swapFrom].label} => ${result.toString()} ${ASSETS[swapTo].label}`,
 			);
-		} catch (e: any) {
-			report(`Quote failed: ${e.message?.slice(0, 120)}`, true);
+		} catch (e: unknown) {
+			report(`Quote failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`, true);
 		}
 	};
 
@@ -92,8 +92,8 @@ export default function DexPage() {
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			report(`Swap confirmed in block ${receipt.blockNumber}`);
-		} catch (e: any) {
-			report(`Swap failed: ${e.message?.slice(0, 120)}`, true);
+		} catch (e: unknown) {
+			report(`Swap failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`, true);
 		}
 	};
 
@@ -112,8 +112,8 @@ export default function DexPage() {
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			report(`Pool created in block ${receipt.blockNumber}`);
-		} catch (e: any) {
-			report(`Create pool failed: ${e.message?.slice(0, 120)}`, true);
+		} catch (e: unknown) {
+			report(`Create pool failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`, true);
 		}
 	};
 
@@ -141,8 +141,8 @@ export default function DexPage() {
 			});
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			report(`Liquidity added in block ${receipt.blockNumber}`);
-		} catch (e: any) {
-			report(`Add liquidity failed: ${e.message?.slice(0, 120)}`, true);
+		} catch (e: unknown) {
+			report(`Add liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`, true);
 		}
 	};
 
