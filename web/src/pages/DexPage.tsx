@@ -69,7 +69,10 @@ export default function DexPage() {
 				`Quote: ${swapAmount} ${ASSETS[swapFrom].label} => ${result.toString()} ${ASSETS[swapTo].label}`,
 			);
 		} catch (e: unknown) {
-			report(`Quote failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`, true);
+			report(
+				`Quote failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
+				true,
+			);
 		}
 	};
 
@@ -93,7 +96,10 @@ export default function DexPage() {
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			report(`Swap confirmed in block ${receipt.blockNumber}`);
 		} catch (e: unknown) {
-			report(`Swap failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`, true);
+			report(
+				`Swap failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
+				true,
+			);
 		}
 	};
 
@@ -113,7 +119,10 @@ export default function DexPage() {
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			report(`Pool created in block ${receipt.blockNumber}`);
 		} catch (e: unknown) {
-			report(`Create pool failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`, true);
+			report(
+				`Create pool failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
+				true,
+			);
 		}
 	};
 
@@ -142,7 +151,10 @@ export default function DexPage() {
 			const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
 			report(`Liquidity added in block ${receipt.blockNumber}`);
 		} catch (e: unknown) {
-			report(`Add liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`, true);
+			report(
+				`Add liquidity failed: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
+				true,
+			);
 		}
 	};
 
