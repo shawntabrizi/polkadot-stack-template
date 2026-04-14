@@ -406,6 +406,7 @@ impl pallet_revive::Config for Runtime {
 	type WeightInfo = pallet_revive::weights::SubstrateWeight<Self>;
 	type Precompiles = (
 		pallet_asset_conversion_precompiles::AssetConversion<0x0420, Self>,
+		pallet_assets_precompiles::ERC20<Self, pallet_assets_precompiles::InlineIdConfig<0x0120>>,
 	);
 	type AddressMapper = pallet_revive::AccountId32Mapper<Self>;
 	type RuntimeMemory = ConstU32<{ 128 * 1024 * 1024 }>;

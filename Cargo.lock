@@ -8986,6 +8986,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-assets-precompiles"
+version = "0.5.0"
+dependencies = [
+ "parity-scale-codec",
+ "polkadot-sdk 2512.3.3",
+ "scale-info",
+]
+
+[[package]]
 name = "pallet-atomic-swap"
 version = "45.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12582,7 +12591,7 @@ dependencies = [
  "pallet-assets",
  "pallet-assets-freezer",
  "pallet-assets-holder",
- "pallet-assets-precompiles",
+ "pallet-assets-precompiles 0.4.1",
  "pallet-atomic-swap",
  "pallet-aura",
  "pallet-authority-discovery",
@@ -18135,6 +18144,7 @@ dependencies = [
  "hex-literal",
  "log",
  "pallet-asset-conversion-precompiles",
+ "pallet-assets-precompiles 0.5.0",
  "pallet-template",
  "parity-scale-codec",
  "polkadot-sdk 2512.3.3",
