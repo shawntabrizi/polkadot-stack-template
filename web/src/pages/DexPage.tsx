@@ -94,6 +94,8 @@ export default function DexPage() {
         abi: assetConversionAbi,
         functionName: "swapExactTokensForTokens",
         args: [path, BigInt(swapAmount), 0n, account.address, false],
+        // TODO: Seems the eth-rpc screws up the estimation, so we hardcode a high gas limit here. Need to fix this in the right place.
+        gas: 5_000_000n, 
       });
       const receipt = await pub_.waitForTransactionReceipt({ hash, timeout: 60_000 });
       report(`Swap confirmed in block ${receipt.blockNumber}`);
