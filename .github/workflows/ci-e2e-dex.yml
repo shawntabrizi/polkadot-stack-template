@@ -2,13 +2,6 @@ name: CI — E2E DEX Router
 
 on:
   push:
-    branches: [main, master]
-    paths:
-      - "blockchain/**"
-      - "contracts/pvm-rust/**"
-      - ".github/workflows/ci-e2e-dex.yml"
-  pull_request:
-    branches: [main, master]
     paths:
       - "blockchain/**"
       - "contracts/pvm-rust/**"
