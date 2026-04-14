@@ -18,6 +18,7 @@ mod dex_router {
     pub enum Error {
         PrecompileCallFailed,
         SlippageExceeded,
+        UnknownSelector,
     }
 
     impl AsRef<[u8]> for Error {
@@ -25,6 +26,7 @@ mod dex_router {
             match *self {
                 Error::PrecompileCallFailed => b"PrecompileCallFailed",
                 Error::SlippageExceeded => b"SlippageExceeded",
+                Error::UnknownSelector => b"UnknownSelector",
             }
         }
     }
@@ -171,7 +173,7 @@ mod dex_router {
 
     #[pvm_contract_macros::fallback]
     pub fn fallback() -> Result<(), Error> {
-        Ok(())
+        Err(Error::UnknownSelector)
     }
 
     // === Internal: precompile interaction ===
