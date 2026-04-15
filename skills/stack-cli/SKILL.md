@@ -52,12 +52,41 @@ Default `--eth-rpc` is `http://127.0.0.1:8545` (eth-rpc adapter port).
 ### `tx` — Transaction inspection
 
 ```bash
-# Inspect any transaction: status, block, from/to, value, gas, decoded logs
+# Inspect any transaction: status, block, from/to, value, gas, fully decoded logs
 stack-cli tx inspect <0xHASH>
 ```
 
-Logs are decoded against known event selectors (MedicalMarket, ProofOfExistence, ERC20).
-Unknown selectors show raw topic hex.
+Known events are fully ABI-decoded using alloy's `SolEvent::decode_raw_log` — named fields
+with human-readable values. Unknown selectors fall back to raw topic hex.
+
+**Example output for a confirmed sale:**
+```
+Transaction
+===========
+Hash:     0x743b1e...
+Status:   Success
+Block:    203
+From:     0xf24ff3...
+To:       0x3ed621...
+Value:    0.000000000000000000 PAS
+Gas Used: 51263
+
+Logs (1)
+========
+[0] MedicalMarket.SaleConfirmed
+    orderId:    0
+    listingId:  0
+    patient:    0xf24FF3...
+    researcher: 0xf24FF3...
+    address: 0x3ed621...
+```
+
+**Currently decoded events**: `MedicalMarket.ListingCreated`, `MedicalMarket.OrderPlaced`,
+`MedicalMarket.SaleConfirmed`, `MedicalMarket.ListingCancelled`, `ProofOfExistence.ProofSubmitted`.
+
+**Adding a new event** — edit `cli/src/commands/tx.rs`:
+1. Add the event signature to the `alloy::sol! { ... }` block at the top
+2. Add an `if let Ok(e) = YourEvent::decode_raw_log(topics, data) { ... }` arm in `decode_log()`
 
 ---
 
