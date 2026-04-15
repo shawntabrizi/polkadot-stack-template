@@ -1,15 +1,19 @@
 name: Deploy Frontend to DotNS
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - 'web/**'
+      - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
     inputs:
       basename:
         description: 'DotNS basename (for example: my-hackathon-app)'
         type: string
-        # TODO: Change this to your own unique .dot domain name!
         # Lowercase letters, digits, and hyphens only. Cannot start/end with hyphen.
         # Name must be 9+ letters followed by exactly 2 digits (e.g. "my-cool-project42").
-        default: 'polkadot-stack-template00'
+        default: 'own-your-medical-records42'
       skip-cache:
         description: 'Skip deployment cache and force redeploy'
         type: boolean
@@ -89,7 +93,7 @@ jobs:
     name: Deploy
     uses: paritytech/dotns-sdk/.github/workflows/deploy.yml@main
     with:
-      basename: ${{ inputs.basename }}
+      basename: ${{ inputs.basename || 'own-your-medical-records42' }}
       mode: production
       artifact-name: frontend-build
       register-base: true
