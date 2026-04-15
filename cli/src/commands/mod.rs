@@ -1,7 +1,9 @@
 pub mod chain;
 pub mod contract;
+pub mod market;
 pub mod pallet;
 pub mod prove;
+pub mod tx;
 
 use alloy::sol;
 use blake2::{
