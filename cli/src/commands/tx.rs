@@ -1,6 +1,17 @@
 use crate::commands::rpc_call;
-use alloy::primitives::{keccak256, utils::format_ether, U256};
+use alloy::{
+    primitives::{keccak256, utils::format_ether, Bytes, FixedBytes, U256},
+    sol_types::SolEvent,
+};
 use clap::Subcommand;
+
+alloy::sol! {
+    event ListingCreated(address indexed patient, uint256 indexed listingId, bytes32 statementHash, uint256 price);
+    event OrderPlaced(uint256 indexed listingId, uint256 indexed orderId, address indexed researcher, uint256 amount);
+    event SaleConfirmed(uint256 indexed orderId, uint256 indexed listingId, address patient, address researcher);
+    event ListingCancelled(uint256 indexed listingId, address indexed patient);
+    event ProofSubmitted(address indexed owner, bytes32 indexed hash);
+}
 
 #[derive(Subcommand)]
 pub enum TxAction {
@@ -18,42 +29,72 @@ pub async fn run(action: TxAction, eth_rpc_url: &str) -> Result<(), Box<dyn std:
     Ok(())
 }
 
-/// Map a 0x-prefixed topic[0] hex string to a human-readable event name.
-/// Returns None for unknown selectors.
-fn decode_event_name(topic0: &str) -> Option<&'static str> {
-    // Known events: (canonical signature, label)
-    const KNOWN: &[(&str, &str)] = &[
-        (
-            "ListingCreated(address,uint256,bytes32,uint256)",
-            "MedicalMarket.ListingCreated",
-        ),
-        (
-            "OrderPlaced(uint256,uint256,address,uint256)",
-            "MedicalMarket.OrderPlaced",
-        ),
-        (
-            "SaleConfirmed(uint256,uint256,address,address)",
-            "MedicalMarket.SaleConfirmed",
-        ),
-        (
-            "ListingCancelled(uint256,address)",
-            "MedicalMarket.ListingCancelled",
-        ),
-        ("ProofSubmitted(address,bytes32)", "ProofOfExistence.ProofSubmitted"),
-        ("Transfer(address,address,uint256)", "ERC20.Transfer"),
-        ("Approval(address,address,uint256)", "ERC20.Approval"),
-    ];
-
-    let topic_bytes = topic0.trim_start_matches("0x");
-
-    for (sig, label) in KNOWN {
-        let selector = keccak256(sig.as_bytes());
-        let selector_hex = hex::encode(selector);
-        if selector_hex == topic_bytes {
-            return Some(label);
-        }
+/// Try to ABI-decode a log into a human-readable string.
+/// Returns None if the selector doesn't match any known event.
+fn decode_log(topics: &[FixedBytes<32>], data: &Bytes) -> Option<String> {
+    if let Ok(e) = ListingCreated::decode_raw_log(topics, data) {
+        return Some(format!(
+            "MedicalMarket.ListingCreated\n    patient:   {}\n    listingId: {}\n    hash:      {:#x}\n    price:     {} PAS",
+            e.patient,
+            e.listingId,
+            e.statementHash,
+            format_ether(e.price),
+        ));
+    }
+    if let Ok(e) = OrderPlaced::decode_raw_log(topics, data) {
+        return Some(format!(
+            "MedicalMarket.OrderPlaced\n    listingId:  {}\n    orderId:    {}\n    researcher: {}\n    amount:     {} PAS",
+            e.listingId,
+            e.orderId,
+            e.researcher,
+            format_ether(e.amount),
+        ));
+    }
+    if let Ok(e) = SaleConfirmed::decode_raw_log(topics, data) {
+        return Some(format!(
+            "MedicalMarket.SaleConfirmed\n    orderId:    {}\n    listingId:  {}\n    patient:    {}\n    researcher: {}",
+            e.orderId,
+            e.listingId,
+            e.patient,
+            e.researcher,
+        ));
+    }
+    if let Ok(e) = ListingCancelled::decode_raw_log(topics, data) {
+        return Some(format!(
+            "MedicalMarket.ListingCancelled\n    listingId: {}\n    patient:   {}",
+            e.listingId, e.patient,
+        ));
+    }
+    if let Ok(e) = ProofSubmitted::decode_raw_log(topics, data) {
+        return Some(format!(
+            "ProofOfExistence.ProofSubmitted\n    owner: {}\n    hash:  {:#x}",
+            e.owner, e.hash,
+        ));
     }
     None
+}
+
+/// Parse a JSON array of topic strings into alloy FixedBytes<32>.
+fn parse_topics(topics: &[serde_json::Value]) -> Vec<FixedBytes<32>> {
+    topics
+        .iter()
+        .filter_map(|t| {
+            let s = t.as_str()?;
+            let hex = s.trim_start_matches("0x");
+            let bytes = hex::decode(hex).ok()?;
+            if bytes.len() == 32 {
+                Some(FixedBytes::<32>::from_slice(&bytes))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Parse a JSON hex data string into alloy Bytes.
+fn parse_data(data_str: &str) -> Bytes {
+    let hex = data_str.trim_start_matches("0x");
+    Bytes::from(hex::decode(hex).unwrap_or_default())
 }
 
 fn hex_to_u64(v: &serde_json::Value) -> u64 {
@@ -86,10 +127,7 @@ async fn inspect(hash: &str, eth_rpc_url: &str) -> Result<(), Box<dyn std::error
     let block_number = hex_to_u64(receipt.get("blockNumber").unwrap_or(&serde_json::Value::Null));
 
     // From
-    let from = tx
-        .get("from")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+    let from = tx.get("from").and_then(|v| v.as_str()).unwrap_or("unknown");
 
     // To — null means contract deploy
     let to_field = tx.get("to").unwrap_or(&serde_json::Value::Null);
@@ -100,10 +138,7 @@ async fn inspect(hash: &str, eth_rpc_url: &str) -> Result<(), Box<dyn std::error
     };
 
     // Value — parse as hex u256, format as ether
-    let value_str = tx
-        .get("value")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0x0");
+    let value_str = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
     let value_hex = value_str.trim_start_matches("0x");
     let value_u256 = U256::from_str_radix(value_hex, 16).unwrap_or(U256::ZERO);
     let value_formatted = format_ether(value_u256);
@@ -123,10 +158,7 @@ async fn inspect(hash: &str, eth_rpc_url: &str) -> Result<(), Box<dyn std::error
 
     // Logs
     let empty = vec![];
-    let logs = receipt
-        .get("logs")
-        .and_then(|v| v.as_array())
-        .unwrap_or(&empty);
+    let logs = receipt.get("logs").and_then(|v| v.as_array()).unwrap_or(&empty);
 
     println!();
     println!("Logs ({})", logs.len());
@@ -136,48 +168,59 @@ async fn inspect(hash: &str, eth_rpc_url: &str) -> Result<(), Box<dyn std::error
         println!("(none)");
     } else {
         for (i, log) in logs.iter().enumerate() {
-            let address = log
-                .get("address")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
+            let address = log.get("address").and_then(|v| v.as_str()).unwrap_or("unknown");
 
             let no_topics: Vec<serde_json::Value> = vec![];
-            let topics = log
-                .get("topics")
-                .and_then(|v| v.as_array())
-                .unwrap_or(&no_topics);
+            let raw_topics =
+                log.get("topics").and_then(|v| v.as_array()).unwrap_or(&no_topics);
+            let data_str =
+                log.get("data").and_then(|v| v.as_str()).unwrap_or("0x");
 
-            // Try to resolve the event name from topic[0]
-            let event_label = topics
-                .first()
-                .and_then(|t| t.as_str())
-                .and_then(decode_event_name)
-                .unwrap_or("");
+            let topics = parse_topics(raw_topics);
+            let data = parse_data(data_str);
 
-            if event_label.is_empty() {
-                println!("[{i}] address: {address}");
+            // Try full ABI decode first
+            if let Some(decoded) = decode_log(&topics, &data) {
+                println!("[{i}] {decoded}");
+                println!("    address: {address}");
             } else {
-                println!("[{i}] {event_label}  address: {address}");
-            }
+                // Fallback: show raw topics + data
+                let selector_label = raw_topics
+                    .first()
+                    .and_then(|t| t.as_str())
+                    .and_then(|t| {
+                        let hex = t.trim_start_matches("0x");
+                        for (sig, label) in [
+                            ("Transfer(address,address,uint256)", "ERC20.Transfer"),
+                            ("Approval(address,address,uint256)", "ERC20.Approval"),
+                        ] {
+                            if hex::encode(keccak256(sig.as_bytes())) == hex {
+                                return Some(label);
+                            }
+                        }
+                        None
+                    });
 
-            if !topics.is_empty() {
-                println!("    topics:");
-                for (j, topic) in topics.iter().enumerate() {
-                    let topic_str = topic.as_str().unwrap_or("0x");
-                    if j == 0 {
-                        println!("      [{j}] {topic_str}  (selector)");
-                    } else {
-                        println!("      [{j}] {topic_str}");
+                if let Some(label) = selector_label {
+                    println!("[{i}] {label}  address: {address}");
+                } else {
+                    println!("[{i}] (unknown event)  address: {address}");
+                }
+
+                if !raw_topics.is_empty() {
+                    println!("    topics:");
+                    for (j, topic) in raw_topics.iter().enumerate() {
+                        let topic_str = topic.as_str().unwrap_or("0x");
+                        if j == 0 {
+                            println!("      [{j}] {topic_str}  (selector)");
+                        } else {
+                            println!("      [{j}] {topic_str}");
+                        }
                     }
                 }
-            }
-
-            let data = log
-                .get("data")
-                .and_then(|v| v.as_str())
-                .unwrap_or("0x");
-            if data != "0x" && !data.is_empty() {
-                println!("    data: {data}");
+                if data_str != "0x" && !data_str.is_empty() {
+                    println!("    data: {data_str}");
+                }
             }
         }
     }
