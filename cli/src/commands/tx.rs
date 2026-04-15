@@ -27,7 +27,7 @@ async fn inspect(hash: &str, eth_rpc_url: &str) -> Result<(), Box<dyn std::error
     let receipt: serde_json::Value =
         rpc_call(eth_rpc_url, "eth_getTransactionReceipt", vec![hash]).await?;
     let tx: serde_json::Value =
-        rpc_call(eth_rpc_url, "eth_getTransaction", vec![hash]).await?;
+        rpc_call(eth_rpc_url, "eth_getTransactionByHash", vec![hash]).await?;
 
     if receipt.is_null() && tx.is_null() {
         println!("Transaction not found");
