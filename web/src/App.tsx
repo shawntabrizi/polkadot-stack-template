@@ -11,11 +11,16 @@ export default function App() {
 
 	const navItems = [
 		{ path: "/", label: "Home", enabled: true },
-		{ path: "/pallet", label: "Pallet PoE", enabled: pallets.templatePallet === true },
-		{ path: "/evm", label: "EVM PoE", enabled: pallets.revive === true },
-		{ path: "/pvm", label: "PVM PoE", enabled: pallets.revive === true },
-		{ path: "/statements", label: "Statements", enabled: true },
-		{ path: "/accounts", label: "Accounts", enabled: true },
+		// Marketplace
+		{ path: "/patient",    label: "Patient",    enabled: true },
+		{ path: "/medic",      label: "Medic",      enabled: true },
+		{ path: "/researcher", label: "Researcher", enabled: true },
+		// Template reference (PoE)
+		{ path: "/pallet",     label: "Pallet PoE",  enabled: pallets.templatePallet === true },
+		{ path: "/evm",        label: "EVM PoE",     enabled: pallets.revive === true },
+		{ path: "/pvm",        label: "PVM PoE",     enabled: pallets.revive === true },
+		{ path: "/statements", label: "Statements",  enabled: true },
+		{ path: "/accounts",   label: "Accounts",    enabled: true },
 	];
 
 	return (

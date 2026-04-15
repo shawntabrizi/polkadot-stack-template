@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+/// @title MedicalMarket
+/// @notice Phase 0a marketplace: patients post statement hashes with a price,
+///         researchers lock native PAS as payment, patients confirm to release funds.
+///         No encryption, no ZK, no IPFS — proves money moves before adding cryptography.
+///         Compiles to both EVM (solc) and PVM (resolc) bytecode.
+contract MedicalMarket {
+	struct Listing {
+		bytes32 statementHash; // blake2b-256 hash identifying the Statement Store record
+		uint256 price; // price in wei (native PAS)
+		address patient;
+		bool active; // false if cancelled or already fulfilled
+	}
+
+	struct Order {
+		uint256 listingId;
+		address researcher;
+		uint256 amount; // msg.value locked at placeBuyOrder time
+		bool confirmed;
+		bool cancelled;
+	}
+
+	mapping(uint256 => Listing) private listings;
+	uint256 private listingCount;
+
+	mapping(uint256 => Order) private orders;
+	uint256 private orderCount;
+
+	// listingId → 1-based orderId (0 = no pending order)
+	mapping(uint256 => uint256) private listingPendingOrder;
+
+	event ListingCreated(
+		address indexed patient,
+		uint256 indexed listingId,
+		bytes32 statementHash,
+		uint256 price
+	);
+	event OrderPlaced(
+		uint256 indexed listingId,
+		uint256 indexed orderId,
+		address indexed researcher,
+		uint256 amount
+	);
+	event SaleConfirmed(
+		uint256 indexed orderId,
+		uint256 indexed listingId,
+		address patient,
+		address researcher
+	);
+	event ListingCancelled(uint256 indexed listingId, address indexed patient);
+
+	/// @notice Create a new listing for a verified statement hash at the given price.
+	/// @param statementHash The blake2b-256 hash of the off-chain Statement Store record.
+	/// @param price The sale price in wei (native PAS). Must be greater than zero.
+	function createListing(bytes32 statementHash, uint256 price) external {
+		require(price > 0, "Price must be greater than zero");
+		uint256 listingId = listingCount;
+		listings[listingId] = Listing({
+			statementHash: statementHash,
+			price: price,
+			patient: msg.sender,
+			active: true
+		});
+		listingCount++;
+		emit ListingCreated(msg.sender, listingId, statementHash, price);
+	}
+
+	/// @notice Lock native PAS as payment for a listing. Only one order may be pending per listing.
+	/// @param listingId The ID of the listing to purchase.
+	function placeBuyOrder(uint256 listingId) external payable {
+		require(listingId < listingCount, "Listing does not exist");
+		Listing storage listing = listings[listingId];
+		require(listing.active, "Listing is not active");
+		require(listingPendingOrder[listingId] == 0, "Listing already has a pending order");
+		require(msg.value >= listing.price, "Insufficient payment");
+
+		uint256 orderId = orderCount;
+		orders[orderId] = Order({
+			listingId: listingId,
+			researcher: msg.sender,
+			amount: msg.value,
+			confirmed: false,
+			cancelled: false
+		});
+		orderCount++;
+		// Store 1-based so that 0 can mean "no order"
+		listingPendingOrder[listingId] = orderId + 1;
+		emit OrderPlaced(listingId, orderId, msg.sender, msg.value);
+	}
+
+	/// @notice Confirm the sale, releasing payment to the patient and refunding any excess to the researcher.
+	/// @param orderId The ID of the order to confirm.
+	function confirmSale(uint256 orderId) external {
+		require(orderId < orderCount, "Order does not exist");
+		Order storage order = orders[orderId];
+		require(!order.confirmed, "Order already confirmed");
+		require(!order.cancelled, "Order is cancelled");
+
+		Listing storage listing = listings[order.listingId];
+		require(msg.sender == listing.patient, "Only the patient can confirm the sale");
+
+		order.confirmed = true;
+		listing.active = false;
+
+		// Transfer the listing price to the patient
+		(bool successPatient, ) = listing.patient.call{value: listing.price}("");
+		require(successPatient, "Transfer to patient failed");
+
+		// Refund any excess to the researcher
+		uint256 excess = order.amount - listing.price;
+		if (excess > 0) {
+			(bool successResearcher, ) = order.researcher.call{value: excess}("");
+			require(successResearcher, "Refund to researcher failed");
+		}
+
+		emit SaleConfirmed(orderId, order.listingId, listing.patient, order.researcher);
+	}
+
+	/// @notice Cancel an active listing. Only possible when there is no pending order.
+	/// @param listingId The ID of the listing to cancel.
+	function cancelListing(uint256 listingId) external {
+		require(listingId < listingCount, "Listing does not exist");
+		Listing storage listing = listings[listingId];
+		require(listing.active, "Listing is not active");
+		require(msg.sender == listing.patient, "Only the patient can cancel the listing");
+		require(listingPendingOrder[listingId] == 0, "Cannot cancel listing with a pending order");
+
+		listing.active = false;
+		emit ListingCancelled(listingId, msg.sender);
+	}
+
+	/// @notice Get the details of a listing.
+	/// @param id The listing ID.
+	/// @return statementHash The blake2b-256 hash of the off-chain record.
+	/// @return price The sale price in wei.
+	/// @return patient The address of the patient who created the listing.
+	/// @return active Whether the listing is still open.
+	function getListing(
+		uint256 id
+	)
+		external
+		view
+		returns (bytes32 statementHash, uint256 price, address patient, bool active)
+	{
+		Listing storage l = listings[id];
+		return (l.statementHash, l.price, l.patient, l.active);
+	}
+
+	/// @notice Get the total number of listings ever created.
+	function getListingCount() external view returns (uint256) {
+		return listingCount;
+	}
+
+	/// @notice Get the details of an order.
+	/// @param id The order ID.
+	/// @return listingId The listing this order targets.
+	/// @return researcher The address of the researcher who placed the order.
+	/// @return amount The amount of PAS locked (in wei).
+	/// @return confirmed Whether the sale has been confirmed.
+	/// @return cancelled Whether the order has been cancelled.
+	function getOrder(
+		uint256 id
+	)
+		external
+		view
+		returns (
+			uint256 listingId,
+			address researcher,
+			uint256 amount,
+			bool confirmed,
+			bool cancelled
+		)
+	{
+		Order storage o = orders[id];
+		return (o.listingId, o.researcher, o.amount, o.confirmed, o.cancelled);
+	}
+
+	/// @notice Get the total number of orders ever placed.
+	function getOrderCount() external view returns (uint256) {
+		return orderCount;
+	}
+
+	/// @notice Get the pending order ID for a listing (1-based; 0 means no pending order).
+	/// @param listingId The listing to query.
+	/// @return The 1-based order ID, or 0 if there is no pending order.
+	function getPendingOrderId(uint256 listingId) external view returns (uint256) {
+		return listingPendingOrder[listingId];
+	}
+}

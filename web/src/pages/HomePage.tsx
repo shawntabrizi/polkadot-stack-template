@@ -63,19 +63,59 @@ export default function HomePage() {
 
 	return (
 		<div className="space-y-8 animate-fade-in">
-			{/* Hero */}
+				{/* Hero */}
 			<div className="space-y-3">
 				<h1 className="page-title">
-					Polkadot Stack{" "}
+					Medical Data{" "}
 					<span className="bg-gradient-to-r from-polka-400 to-polka-600 bg-clip-text text-transparent">
-						Template
+						Marketplace
 					</span>
 				</h1>
 				<p className="text-text-secondary text-base leading-relaxed max-w-2xl">
-					A developer starter template demonstrating Proof of Existence implemented three
-					ways: as a Substrate pallet, a Solidity EVM contract, and a PVM contract. Drop a
-					file to claim its hash on-chain.
+					A decentralized ZK marketplace for verified health data on Polkadot. Patients sell
+					attested records to researchers through atomic, privacy-preserving exchanges —
+					without revealing identity or raw records.
 				</p>
+			</div>
+
+			{/* Marketplace cards */}
+			<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+				<FeatureCard
+					title="Patient"
+					description="Upload attested health records, set disclosure rules, manage listings, track earnings."
+					link="/patient"
+					accentColor="text-accent-blue"
+					borderColor="hover:border-accent-blue/20"
+					available={true}
+					unavailableReason=""
+				/>
+				<FeatureCard
+					title="Medic"
+					description="Sign patient records with your professional key. Construct Merkle trees and generate EdDSA signatures."
+					link="/medic"
+					accentColor="text-accent-purple"
+					borderColor="hover:border-accent-purple/20"
+					available={true}
+					unavailableReason=""
+				/>
+				<FeatureCard
+					title="Researcher"
+					description="Browse verified listings, place buy orders, and decrypt purchased clinical data."
+					link="/researcher"
+					accentColor="text-accent-green"
+					borderColor="hover:border-accent-green/20"
+					available={true}
+					unavailableReason=""
+				/>
+			</div>
+
+			{/* Divider */}
+			<div className="flex items-center gap-4">
+				<div className="flex-1 h-px bg-white/[0.06]" />
+				<span className="text-xs text-text-muted uppercase tracking-wider">
+					Template Reference (PoE)
+				</span>
+				<div className="flex-1 h-px bg-white/[0.06]" />
 			</div>
 
 			{/* Connection card */}

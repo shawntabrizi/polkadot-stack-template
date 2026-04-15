@@ -10,6 +10,10 @@ const EvmContractPage = lazy(() => import("./pages/EvmContractPage"));
 const PvmContractPage = lazy(() => import("./pages/PvmContractPage"));
 const AccountsPage = lazy(() => import("./pages/AccountsPage"));
 const StatementStorePage = lazy(() => import("./pages/StatementStorePage"));
+// Marketplace pages (stubs until contracts exist)
+const PatientDashboard = lazy(() => import("./pages/PatientDashboard"));
+const MedicSign = lazy(() => import("./pages/MedicSign"));
+const ResearcherBuy = lazy(() => import("./pages/ResearcherBuy"));
 
 const routeFallback = (
 	<div className="card animate-pulse">
@@ -68,6 +72,31 @@ createRoot(document.getElementById("root")!).render(
 						element={
 							<Suspense fallback={routeFallback}>
 								<StatementStorePage />
+							</Suspense>
+						}
+					/>
+					{/* Marketplace routes */}
+					<Route
+						path="patient"
+						element={
+							<Suspense fallback={routeFallback}>
+								<PatientDashboard />
+							</Suspense>
+						}
+					/>
+					<Route
+						path="medic"
+						element={
+							<Suspense fallback={routeFallback}>
+								<MedicSign />
+							</Suspense>
+						}
+					/>
+					<Route
+						path="researcher"
+						element={
+							<Suspense fallback={routeFallback}>
+								<ResearcherBuy />
 							</Suspense>
 						}
 					/>

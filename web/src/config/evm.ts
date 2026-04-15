@@ -44,6 +44,125 @@ export const proofOfExistenceAbi = [
 	},
 ] as const;
 
+// MedicalMarket contract ABI — Phase 0a listing + escrow + atomic swap
+export const medicalMarketAbi = [
+	{
+		type: "function",
+		name: "createListing",
+		inputs: [
+			{ name: "statementHash", type: "bytes32" },
+			{ name: "price", type: "uint256" },
+		],
+		outputs: [],
+		stateMutability: "nonpayable",
+	},
+	{
+		type: "function",
+		name: "placeBuyOrder",
+		inputs: [{ name: "listingId", type: "uint256" }],
+		outputs: [],
+		stateMutability: "payable",
+	},
+	{
+		type: "function",
+		name: "confirmSale",
+		inputs: [{ name: "orderId", type: "uint256" }],
+		outputs: [],
+		stateMutability: "nonpayable",
+	},
+	{
+		type: "function",
+		name: "cancelListing",
+		inputs: [{ name: "listingId", type: "uint256" }],
+		outputs: [],
+		stateMutability: "nonpayable",
+	},
+	{
+		type: "function",
+		name: "getListing",
+		inputs: [{ name: "id", type: "uint256" }],
+		outputs: [
+			{ name: "statementHash", type: "bytes32" },
+			{ name: "price", type: "uint256" },
+			{ name: "patient", type: "address" },
+			{ name: "active", type: "bool" },
+		],
+		stateMutability: "view",
+	},
+	{
+		type: "function",
+		name: "getListingCount",
+		inputs: [],
+		outputs: [{ name: "", type: "uint256" }],
+		stateMutability: "view",
+	},
+	{
+		type: "function",
+		name: "getOrder",
+		inputs: [{ name: "id", type: "uint256" }],
+		outputs: [
+			{ name: "listingId", type: "uint256" },
+			{ name: "researcher", type: "address" },
+			{ name: "amount", type: "uint256" },
+			{ name: "confirmed", type: "bool" },
+			{ name: "cancelled", type: "bool" },
+		],
+		stateMutability: "view",
+	},
+	{
+		type: "function",
+		name: "getOrderCount",
+		inputs: [],
+		outputs: [{ name: "", type: "uint256" }],
+		stateMutability: "view",
+	},
+	{
+		type: "function",
+		name: "getPendingOrderId",
+		inputs: [{ name: "listingId", type: "uint256" }],
+		outputs: [{ name: "", type: "uint256" }],
+		stateMutability: "view",
+	},
+	{
+		type: "event",
+		name: "ListingCreated",
+		inputs: [
+			{ name: "patient", type: "address", indexed: true },
+			{ name: "listingId", type: "uint256", indexed: true },
+			{ name: "statementHash", type: "bytes32", indexed: false },
+			{ name: "price", type: "uint256", indexed: false },
+		],
+	},
+	{
+		type: "event",
+		name: "OrderPlaced",
+		inputs: [
+			{ name: "listingId", type: "uint256", indexed: true },
+			{ name: "orderId", type: "uint256", indexed: true },
+			{ name: "researcher", type: "address", indexed: true },
+			{ name: "amount", type: "uint256", indexed: false },
+		],
+	},
+	{
+		type: "event",
+		name: "SaleConfirmed",
+		inputs: [
+			{ name: "orderId", type: "uint256", indexed: true },
+			{ name: "listingId", type: "uint256", indexed: true },
+			{ name: "patient", type: "address", indexed: false },
+			{ name: "researcher", type: "address", indexed: false },
+		],
+	},
+	{
+		type: "event",
+		name: "ListingCancelled",
+		inputs: [
+			{ name: "listingId", type: "uint256", indexed: true },
+			{ name: "patient", type: "address", indexed: true },
+		],
+	},
+] as const;
+
 // Well-known Substrate dev account Ethereum private keys.
 // These are PUBLIC test keys from Substrate dev mnemonics — NEVER use for real funds.
 export const evmDevAccounts = [

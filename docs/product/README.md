@@ -16,6 +16,7 @@ Read in this order:
 | [RISKS.md](./RISKS.md) | Technical, regulatory, adoption, and trust risks with mitigations |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Two-chain design (People Chain + Asset Hub), blind registration pattern, sprint plan |
 | [FLOWS.md](./FLOWS.md) | Step-by-step technical flows for every protocol process |
+| [FRONTEND_SPEC.md](./FRONTEND_SPEC.md) | UI design spec — pages, components, design tokens, placeholder data |
 | [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) | Phased build plan — no-ZK skeleton first, ZK added incrementally |
 | [SKILLS.md](./SKILLS.md) | Skills database by phase — what to learn, difficulty, known risks |
 | [EXTERNAL_DEPS.md](./EXTERNAL_DEPS.md) | Running log of external dependency failures and workarounds |
