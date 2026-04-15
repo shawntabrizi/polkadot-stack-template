@@ -4,7 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Domain to deploy to — override with: DOMAIN=my-app.dot ./scripts/deploy-frontend.sh
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --domain|-d) DOMAIN="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1"; echo "Usage: $0 [--domain <name.dot>]"; exit 1 ;;
+    esac
+done
+
+# Domain to deploy to — flag > env var > default
 DOMAIN="${DOMAIN:-polkadot-stack-template00.dot}"
 
 echo "=== Deploy Frontend to Bulletin Chain ==="
