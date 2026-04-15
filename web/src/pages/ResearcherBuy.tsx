@@ -132,7 +132,7 @@ export default function ResearcherBuy() {
 			})) as bigint;
 
 			const fetchedOrders: Order[] = [];
-			for (let i = 1n; i <= orderCount; i++) {
+			for (let i = 0n; i < orderCount; i++) {
 				const result = (await client.readContract({
 					address: addr,
 					abi: medicalMarketAbi,
