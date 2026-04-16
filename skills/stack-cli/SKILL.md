@@ -82,7 +82,8 @@ Logs (1)
 ```
 
 **Currently decoded events**: `MedicalMarket.ListingCreated`, `MedicalMarket.OrderPlaced`,
-`MedicalMarket.SaleConfirmed`, `MedicalMarket.ListingCancelled`, `ProofOfExistence.ProofSubmitted`.
+`MedicalMarket.SaleFulfilled`, `MedicalMarket.ListingCancelled`, `MedicalMarket.OrderCancelled`,
+`ProofOfExistence.ProofSubmitted`.
 
 **Adding a new event** — edit `cli/src/commands/tx.rs`:
 1. Add the event signature to the `alloy::sol! { ... }` block at the top
@@ -111,17 +112,22 @@ stack-cli market list-orders
 # Show one order
 stack-cli market get-order <ID>
 
-# Create a listing (alice by default)
-stack-cli market create-listing <0xHASH_32BYTES> <PRICE_IN_PAS> [--signer alice]
+# Create a listing — Phase 1: takes merkleRoot, statementHash, title, price
+stack-cli market create-listing <0xMERKLE_ROOT> <PRICE_IN_PAS> [--signer alice]
+# Note: CLI still takes a single hash arg; for Phase 1 pass the merkleRoot.
+# statementHash and title are not yet exposed as CLI flags — use the frontend.
 
 # Place a buy order (bob by default)
 stack-cli market place-order <LISTING_ID> [--signer bob]
 
-# Confirm a sale — patient receives payment (alice by default)
-stack-cli market confirm-sale <ORDER_ID> [--signer alice]
+# Fulfill a sale — patient posts AES key, receives payment (alice by default)
+stack-cli market fulfill <ORDER_ID> <0xAES_KEY_32BYTES> [--signer alice]
 
 # Cancel a listing — only if no pending order
 stack-cli market cancel-listing <LISTING_ID> [--signer alice]
+
+# Cancel an order — researcher withdraws offer and gets full refund
+stack-cli market cancel-order <ORDER_ID> [--signer bob]
 ```
 
 **Signers**: `alice`, `bob`, `charlie` (dev accounts with known private keys) or `0x<HEX_PRIVATE_KEY>`.
@@ -172,34 +178,34 @@ stack-cli chain info             # chain ID, latest block, sync status
 
 ## End-to-End Market Flow (CLI only)
 
+Phase 1 flow. The signed-record.json package is produced by the MedicSign frontend page.
+
 ```bash
 # 1. Ensure local node + eth-rpc are running
-./scripts/start-local.sh &
-./scripts/start-eth-rpc.sh &
+./scripts/start-all.sh
 
-# 2. Deploy contracts
-cd contracts/pvm && npm run deploy-market:local && cd ../..
-
-# 3. Submit data as patient (Alice)
-HASH=$(stack-cli statement submit test-data.json | grep hash | awk '{print $2}')
-
-# 4. Create listing: 5 PAS price
+# 2. (Phase 1) Produce a signed package via the frontend MedicSign tool,
+#    then use its merkleRoot as the listing commitment.
+#    The full create-listing (with statementHash + title) is frontend-only for now.
+#    For a quick CLI smoke test, pass any 32-byte value as the merkleRoot hash:
+HASH=0x$(head -c 32 /dev/urandom | xxd -p | tr -d '\n')
 stack-cli market create-listing $HASH 5 --signer alice
 
-# 5. Verify listing created
+# 3. Verify listing created
 stack-cli market list-listings
 
-# 6. Place buy order as researcher (Bob)
+# 4. Place buy order as researcher (Bob)
 stack-cli market place-order 0 --signer bob
 
-# 7. Inspect the order tx to verify payment locked
+# 5. Verify payment locked
 stack-cli market get-listing 0    # should show "Active (order pending)"
 stack-cli market get-order 0      # should show "Pending"
 
-# 8. Patient confirms sale
-stack-cli market confirm-sale 0 --signer alice
+# 6. Patient fulfills (posts AES key, releases funds)
+AES_KEY=0x$(head -c 32 /dev/urandom | xxd -p | tr -d '\n')
+stack-cli market fulfill 0 $AES_KEY --signer alice
 
-# 9. Verify final state
+# 7. Verify final state
 stack-cli market get-listing 0    # should show "Inactive"
 stack-cli market get-order 0      # should show "Confirmed"
 stack-cli account show alice      # balance increased by 5 PAS
@@ -250,6 +256,6 @@ See `cli/src/commands/market.rs` as the reference implementation (alloy `sol!` m
 | `medicalMarket not found in deployments.json` | Contract not deployed | `cd contracts/pvm && npm run deploy-market:local` |
 | `JSON-RPC error -32601: Method not found` | Wrong RPC method name | Check alloy's method spelling; use `eth_getTransactionByHash` not `eth_getTransaction` |
 | `Listing already has a pending order` | `placeBuyOrder` called twice on same listing | Cancel order or use a different listing |
-| `Only the patient can confirm the sale` | Wrong `--signer` for `confirm-sale` | Must sign with the same account that created the listing |
+| `Only the patient can fulfill the order` | Wrong `--signer` for `fulfill` | Must sign with the same account that created the listing |
 | `Insufficient payment` | `place-order` value < listing price | alloy reads price from contract automatically — check that listing price is correct |
 | All listings show "Active (order pending)" even when fresh | Bug in sentinel check (was `== u64::MAX` instead of `== 0`) | Fixed in market.rs — `getPendingOrderId` returns 0 for "no order" (1-based) |
