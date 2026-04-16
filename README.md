@@ -37,16 +37,13 @@ Only Node.js is needed on the host. The Docker build compiles the Rust runtime a
 - **protoc** Protocol Buffers compiler (`protobuf-compiler` on Ubuntu, `protobuf` on macOS)
 - **Rust** (stable, installed via [rustup](https://rustup.rs/))
 - **Node.js** 22.x LTS (`22.5+` recommended) and npm v10.9.0+
-- **Polkadot SDK binaries** (stable2512-3): `polkadot`, `polkadot-prepare-worker`, `polkadot-execute-worker` (relay), `polkadot-omni-node`, and `eth-rpc`. Fetch them into `./bin/` (gitignored) with:
+- **Polkadot SDK binaries** (stable2512-3): `polkadot`, `polkadot-prepare-worker`, `polkadot-execute-worker` (relay), `polkadot-omni-node`, `eth-rpc`, `chain-spec-builder`, and `zombienet`. Fetch them all into `./bin/` (gitignored) with:
 
   ```bash
   ./scripts/download-sdk-binaries.sh
   ```
 
   This is the primary supported native setup for this repo. The stack scripts (`start-all.sh`, `start-local.sh`, etc.) run the same step automatically unless you set `STACK_DOWNLOAD_SDK_BINARIES=0`. Versions match the **Key Versions** table below.
-
-- **zombienet** v1.3.x (`npm install -g @zombienet/cli`) for the local relay-chain + collator topology
-- **chain-spec-builder** v17.0.0 (`cargo install staging-chain-spec-builder`)
 
 If your platform cannot use the downloader-managed binaries, see the limited-support fallback in [docs/INSTALL.md](docs/INSTALL.md#manual-binary-fallback-limited-support).
 
@@ -132,8 +129,8 @@ cd contracts/pvm && npx hardhat test
 | polkadot | v1.21.3 (relay chain binary) |
 | polkadot-omni-node | v1.21.3 (from stable2512-3 release) |
 | eth-rpc | v0.12.0 (Ethereum JSON-RPC adapter) |
-| chain-spec-builder | v17.0.0 |
-| zombienet | v1.3.138 (@zombienet/cli) |
+| chain-spec-builder | v16.0.0 |
+| zombienet | v1.3.133 |
 | pallet-revive | v0.12.2 (EVM + PVM smart contracts) |
 | Node.js | 22.x LTS |
 | Solidity | v0.8.28 |
