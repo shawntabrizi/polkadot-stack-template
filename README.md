@@ -43,12 +43,12 @@ Only Node.js is needed on the host. The Docker build compiles the Rust runtime a
   ./scripts/download-sdk-binaries.sh
   ```
 
-  The stack scripts (`start-all.sh`, `start-local.sh`, etc.) run the same step automatically unless you set `STACK_DOWNLOAD_SDK_BINARIES=0`. Versions match the **Key Versions** table below.
+  This is the primary supported native setup for this repo. The stack scripts (`start-all.sh`, `start-local.sh`, etc.) run the same step automatically unless you set `STACK_DOWNLOAD_SDK_BINARIES=0`. Versions match the **Key Versions** table below.
 
 - **zombienet** v1.3.x (`npm install -g @zombienet/cli`) for the local relay-chain + collator topology
 - **chain-spec-builder** v17.0.0 (`cargo install staging-chain-spec-builder`)
 
-Manual installs or other platforms: [docs/INSTALL.md](docs/INSTALL.md) (release links and build-from-source).
+If your platform cannot use the downloader-managed binaries, see the limited-support fallback in [docs/INSTALL.md](docs/INSTALL.md#manual-binary-fallback-limited-support).
 
 The repo includes [`.nvmrc`](.nvmrc) and `engines` fields in the JavaScript projects to keep everyone on the same Node major version.
 
