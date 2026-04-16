@@ -2,13 +2,15 @@
 pragma solidity ^0.8.28;
 
 /// @title MedicalMarket
-/// @notice Phase 0a marketplace: patients post statement hashes with a price,
-///         researchers lock native PAS as payment, patients confirm to release funds.
-///         No encryption, no ZK, no IPFS — proves money moves before adding cryptography.
+/// @notice Phase 0b marketplace: patients encrypt their record, upload the ciphertext to the
+///         Statement Store, and list the blake2b-256 hash of the ciphertext with a price.
+///         After a researcher locks payment, the patient calls fulfill() to post the AES-256-GCM
+///         decryption key on-chain — releasing funds and letting the researcher decrypt.
+///         No ZK, no Merkle trees — adds the first privacy layer on top of the Phase 0a skeleton.
 ///         Compiles to both EVM (solc) and PVM (resolc) bytecode.
 contract MedicalMarket {
 	struct Listing {
-		bytes32 statementHash; // blake2b-256 hash identifying the Statement Store record
+		bytes32 statementHash; // blake2b-256 hash of the AES-GCM ciphertext in the Statement Store
 		uint256 price; // price in wei (native PAS)
 		address patient;
 		bool active; // false if cancelled or already fulfilled
@@ -20,6 +22,7 @@ contract MedicalMarket {
 		uint256 amount; // msg.value locked at placeBuyOrder time
 		bool confirmed;
 		bool cancelled;
+		bytes32 decryptionKey; // AES-256-GCM key posted by patient in fulfill()
 	}
 
 	mapping(uint256 => Listing) private listings;
@@ -43,16 +46,17 @@ contract MedicalMarket {
 		address indexed researcher,
 		uint256 amount
 	);
-	event SaleConfirmed(
+	event SaleFulfilled(
 		uint256 indexed orderId,
 		uint256 indexed listingId,
 		address patient,
-		address researcher
+		address researcher,
+		bytes32 decryptionKey
 	);
 	event ListingCancelled(uint256 indexed listingId, address indexed patient);
 
-	/// @notice Create a new listing for a verified statement hash at the given price.
-	/// @param statementHash The blake2b-256 hash of the off-chain Statement Store record.
+	/// @notice Create a new listing for an encrypted record at the given price.
+	/// @param statementHash The blake2b-256 hash of the AES-GCM ciphertext stored in the Statement Store.
 	/// @param price The sale price in wei (native PAS). Must be greater than zero.
 	function createListing(bytes32 statementHash, uint256 price) external {
 		require(price > 0, "Price must be greater than zero");
@@ -82,7 +86,8 @@ contract MedicalMarket {
 			researcher: msg.sender,
 			amount: msg.value,
 			confirmed: false,
-			cancelled: false
+			cancelled: false,
+			decryptionKey: bytes32(0)
 		});
 		orderCount++;
 		// Store 1-based so that 0 can mean "no order"
@@ -90,18 +95,21 @@ contract MedicalMarket {
 		emit OrderPlaced(listingId, orderId, msg.sender, msg.value);
 	}
 
-	/// @notice Confirm the sale, releasing payment to the patient and refunding any excess to the researcher.
-	/// @param orderId The ID of the order to confirm.
-	function confirmSale(uint256 orderId) external {
+	/// @notice Post the AES-256-GCM decryption key, releasing payment to the patient.
+	///         The key is stored on-chain so the researcher can retrieve it at any time.
+	/// @param orderId The ID of the order to fulfill.
+	/// @param decryptionKey The 32-byte AES-256-GCM key that decrypts the Statement Store ciphertext.
+	function fulfill(uint256 orderId, bytes32 decryptionKey) external {
 		require(orderId < orderCount, "Order does not exist");
 		Order storage order = orders[orderId];
-		require(!order.confirmed, "Order already confirmed");
+		require(!order.confirmed, "Order already fulfilled");
 		require(!order.cancelled, "Order is cancelled");
 
 		Listing storage listing = listings[order.listingId];
-		require(msg.sender == listing.patient, "Only the patient can confirm the sale");
+		require(msg.sender == listing.patient, "Only the patient can fulfill the order");
 
 		order.confirmed = true;
+		order.decryptionKey = decryptionKey;
 		listing.active = false;
 
 		// Transfer the listing price to the patient
@@ -115,7 +123,13 @@ contract MedicalMarket {
 			require(successResearcher, "Refund to researcher failed");
 		}
 
-		emit SaleConfirmed(orderId, order.listingId, listing.patient, order.researcher);
+		emit SaleFulfilled(
+			orderId,
+			order.listingId,
+			listing.patient,
+			order.researcher,
+			decryptionKey
+		);
 	}
 
 	/// @notice Cancel an active listing. Only possible when there is no pending order.
@@ -133,7 +147,7 @@ contract MedicalMarket {
 
 	/// @notice Get the details of a listing.
 	/// @param id The listing ID.
-	/// @return statementHash The blake2b-256 hash of the off-chain record.
+	/// @return statementHash The blake2b-256 hash of the ciphertext in the Statement Store.
 	/// @return price The sale price in wei.
 	/// @return patient The address of the patient who created the listing.
 	/// @return active Whether the listing is still open.
@@ -154,7 +168,7 @@ contract MedicalMarket {
 	/// @return listingId The listing this order targets.
 	/// @return researcher The address of the researcher who placed the order.
 	/// @return amount The amount of PAS locked (in wei).
-	/// @return confirmed Whether the sale has been confirmed.
+	/// @return confirmed Whether the sale has been fulfilled.
 	/// @return cancelled Whether the order has been cancelled.
 	function getOrder(
 		uint256 id
@@ -171,6 +185,13 @@ contract MedicalMarket {
 	{
 		Order storage o = orders[id];
 		return (o.listingId, o.researcher, o.amount, o.confirmed, o.cancelled);
+	}
+
+	/// @notice Get the AES-256-GCM decryption key for a fulfilled order.
+	/// @param orderId The order ID.
+	/// @return The 32-byte decryption key, or bytes32(0) if not yet fulfilled.
+	function getDecryptionKey(uint256 orderId) external view returns (bytes32) {
+		return orders[orderId].decryptionKey;
 	}
 
 	/// @notice Get the total number of orders ever placed.

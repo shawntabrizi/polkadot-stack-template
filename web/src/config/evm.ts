@@ -65,10 +65,20 @@ export const medicalMarketAbi = [
 	},
 	{
 		type: "function",
-		name: "confirmSale",
-		inputs: [{ name: "orderId", type: "uint256" }],
+		name: "fulfill",
+		inputs: [
+			{ name: "orderId", type: "uint256" },
+			{ name: "decryptionKey", type: "bytes32" },
+		],
 		outputs: [],
 		stateMutability: "nonpayable",
+	},
+	{
+		type: "function",
+		name: "getDecryptionKey",
+		inputs: [{ name: "orderId", type: "uint256" }],
+		outputs: [{ name: "", type: "bytes32" }],
+		stateMutability: "view",
 	},
 	{
 		type: "function",
@@ -145,12 +155,13 @@ export const medicalMarketAbi = [
 	},
 	{
 		type: "event",
-		name: "SaleConfirmed",
+		name: "SaleFulfilled",
 		inputs: [
 			{ name: "orderId", type: "uint256", indexed: true },
 			{ name: "listingId", type: "uint256", indexed: true },
 			{ name: "patient", type: "address", indexed: false },
 			{ name: "researcher", type: "address", indexed: false },
+			{ name: "decryptionKey", type: "bytes32", indexed: false },
 		],
 	},
 	{

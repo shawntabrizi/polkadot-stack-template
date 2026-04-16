@@ -17,12 +17,35 @@ interface Listing {
 	pendingOrderId: bigint; // 0 = none, else 1-based
 }
 
-function computeBlake2bHex(bytes: Uint8Array): `0x${string}` {
-	const hash = blake2b(bytes, undefined, 32);
+function bytesToHex(bytes: Uint8Array): `0x${string}` {
 	return ("0x" +
-		Array.from(hash)
+		Array.from(bytes)
 			.map((b) => b.toString(16).padStart(2, "0"))
 			.join("")) as `0x${string}`;
+}
+
+/**
+ * Encrypt plaintext bytes with AES-256-GCM.
+ * Returns [12-byte IV || ciphertext] and the raw key as a 0x-prefixed hex string.
+ */
+async function encryptData(
+	plaintext: Uint8Array,
+): Promise<{ encrypted: Uint8Array; keyHex: `0x${string}` }> {
+	const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
+		"encrypt",
+		"decrypt",
+	]);
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const ciphertextBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+	const ciphertext = new Uint8Array(ciphertextBuf);
+
+	// Prepend IV so the researcher can extract it when decrypting
+	const encrypted = new Uint8Array(iv.length + ciphertext.length);
+	encrypted.set(iv, 0);
+	encrypted.set(ciphertext, iv.length);
+
+	const rawKey = new Uint8Array(await crypto.subtle.exportKey("raw", key));
+	return { encrypted, keyHex: bytesToHex(rawKey) };
 }
 
 export default function PatientDashboard() {
@@ -36,8 +59,6 @@ export default function PatientDashboard() {
 	const [contractAddress, setContractAddress] = useState("");
 	const [selectedAccount, setSelectedAccount] = useState(0);
 	const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
-	const [fileHash, setFileHash] = useState<`0x${string}` | null>(null);
-	const [doUploadToStatementStore, setDoUploadToStatementStore] = useState(false);
 	const [statementStoreAvailable, setStatementStoreAvailable] = useState<boolean | null>(null);
 	const [priceStr, setPriceStr] = useState("");
 	const [listings, setListings] = useState<Listing[]>([]);
@@ -72,10 +93,6 @@ export default function PatientDashboard() {
 			localStorage.removeItem(storageKey);
 		}
 	}
-
-	const onFileHashed = useCallback((hash: `0x${string}`) => {
-		setFileHash(hash);
-	}, []);
 
 	const onFileBytes = useCallback((bytes: Uint8Array) => {
 		setFileBytes(bytes);
@@ -123,7 +140,6 @@ export default function PatientDashboard() {
 
 			const result: Listing[] = [];
 			for (let i = 0n; i < count; i++) {
-				// getListing returns a tuple: [statementHash, price, patient, active]
 				const rawTuple = (await client.readContract({
 					address: addr,
 					abi: medicalMarketAbi,
@@ -174,35 +190,51 @@ export default function PatientDashboard() {
 			setTxStatus("Error: Enter a valid price in PAS");
 			return;
 		}
+		if (statementStoreAvailable === false) {
+			setTxStatus("Error: Statement Store is not available. Start the local node first.");
+			return;
+		}
 
 		try {
 			if (!(await verifyContract())) return;
 
-			// Step 1: Submit to Statement Store if toggled
-			if (doUploadToStatementStore) {
-				setTxStatus("Submitting to Statement Store...");
-				const keypair = getDevKeypair(selectedAccount);
-				await submitToStatementStore(wsUrl, fileBytes, keypair.publicKey, keypair.sign);
-				setTxStatus("Statement Store submission complete. Creating listing...");
-			}
+			// Step 1: Encrypt the file bytes with AES-256-GCM
+			setTxStatus("Encrypting file...");
+			const { encrypted, keyHex } = await encryptData(fileBytes);
 
-			// Step 2: Compute blake2b-256 hash from file bytes
-			const statementHash = computeBlake2bHex(fileBytes);
+			// Step 2: Compute blake2b-256 hash of the ciphertext (used as on-chain lookup key)
+			const ciphertextHash = bytesToHex(blake2b(encrypted, undefined, 32));
 
-			// Step 3: Call createListing on the contract
-			setTxStatus("Submitting createListing transaction...");
+			// Step 3: Upload encrypted bytes to Statement Store
+			setTxStatus("Submitting encrypted data to Statement Store...");
+			const keypair = getDevKeypair(selectedAccount);
+			await submitToStatementStore(wsUrl, encrypted, keypair.publicKey, keypair.sign);
+
+			// Step 4: Create listing on-chain with the ciphertext hash
+			setTxStatus("Creating listing on-chain...");
 			const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
 			const txHash = await walletClient.writeContract({
 				address: contractAddress as Address,
 				abi: medicalMarketAbi,
 				functionName: "createListing",
-				args: [statementHash, parseEther(priceStr)],
+				args: [ciphertextHash, parseEther(priceStr)],
 			});
 			setTxStatus(`Transaction submitted: ${txHash}`);
 			const publicClient = getPublicClient(ethRpcUrl);
 			await publicClient.waitForTransactionReceipt({ hash: txHash });
-			setTxStatus("Listing created!");
-			setFileHash(null);
+
+			// Step 5: Store the AES key in localStorage (needed later to fulfill the order)
+			const listingId =
+				((await publicClient.readContract({
+					address: contractAddress as Address,
+					abi: medicalMarketAbi,
+					functionName: "getListingCount",
+				})) as bigint) - 1n;
+			localStorage.setItem(`aes-key:${ethRpcUrl}:${listingId}`, keyHex);
+
+			setTxStatus(
+				"Listing created! Keep this tab open — you'll need to submit the key when a researcher pays.",
+			);
 			setFileBytes(null);
 			setPriceStr("");
 			loadListings();
@@ -212,25 +244,35 @@ export default function PatientDashboard() {
 		}
 	}
 
-	async function confirmSale(orderId: bigint) {
+	async function fulfillOrder(orderId: bigint, listingId: bigint) {
 		if (!contractAddress) return;
 		try {
 			if (!(await verifyContract())) return;
-			setTxStatus("Submitting confirmSale transaction...");
+
+			// Retrieve the AES key stored at listing creation time
+			const keyHex = localStorage.getItem(`aes-key:${ethRpcUrl}:${listingId}`);
+			if (!keyHex) {
+				setTxStatus(
+					`Error: No decryption key found for listing #${listingId}. Was this listing created in a different browser or session?`,
+				);
+				return;
+			}
+
+			setTxStatus("Submitting decryption key on-chain...");
 			const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
 			const txHash = await walletClient.writeContract({
 				address: contractAddress as Address,
 				abi: medicalMarketAbi,
-				functionName: "confirmSale",
-				args: [orderId],
+				functionName: "fulfill",
+				args: [orderId, keyHex as `0x${string}`],
 			});
 			setTxStatus(`Transaction submitted: ${txHash}`);
 			const publicClient = getPublicClient(ethRpcUrl);
 			await publicClient.waitForTransactionReceipt({ hash: txHash });
-			setTxStatus("Sale confirmed!");
+			setTxStatus("Key submitted! Researcher can now decrypt the data.");
 			loadListings();
 		} catch (e) {
-			console.error("confirmSale failed:", e);
+			console.error("fulfill failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}
@@ -263,9 +305,8 @@ export default function PatientDashboard() {
 			<div className="space-y-2">
 				<h1 className="page-title text-polka-500">Patient Dashboard</h1>
 				<p className="text-text-secondary">
-					Submit medical records to the Statement Store and list them for sale on the
-					MedicalMarket contract. Researchers can place buy orders and you confirm the
-					sale to release the data atomically.
+					Encrypt and list medical records for sale. The buyer receives the decryption key
+					only after you confirm the sale — releasing their payment to you.
 				</p>
 			</div>
 
@@ -313,25 +354,28 @@ export default function PatientDashboard() {
 			{/* Create Listing */}
 			<div className="card space-y-4">
 				<h2 className="section-title">Create Listing</h2>
+				<p className="text-text-muted text-xs">
+					Your file will be encrypted with AES-256-GCM in your browser. Only the
+					ciphertext hash is stored on-chain. The decryption key is released to the buyer
+					only when you confirm the sale.
+				</p>
 
 				<FileDropZone
-					onFileHashed={onFileHashed}
+					onFileHashed={() => {}}
 					onFileBytes={onFileBytes}
 					showUploadToggle={false}
 					uploadToIpfs={false}
 					onUploadToggle={() => {}}
-					showStatementStoreToggle={true}
-					uploadToStatementStore={doUploadToStatementStore}
-					onStatementStoreToggle={setDoUploadToStatementStore}
+					showStatementStoreToggle={false}
+					uploadToStatementStore={false}
+					onStatementStoreToggle={() => {}}
 					statementStoreDisabled={statementStoreAvailable === false}
 				/>
 
-				{fileHash && (
-					<p className="text-sm text-text-secondary">
-						Blake2b-256:{" "}
-						<code className="text-text-primary font-mono text-xs break-all">
-							{fileHash}
-						</code>
+				{statementStoreAvailable === false && (
+					<p className="text-accent-red text-xs">
+						Statement Store unavailable — start the local node to enable listing
+						creation.
 					</p>
 				)}
 
@@ -356,7 +400,7 @@ export default function PatientDashboard() {
 								"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 						}}
 					>
-						Create Listing
+						Encrypt &amp; List
 					</button>
 				)}
 
@@ -392,8 +436,11 @@ export default function PatientDashboard() {
 					<div className="space-y-2">
 						{listings.map((listing) => {
 							const hasPendingOrder = listing.pendingOrderId > 0n;
-							// orderId passed to confirmSale is 0-based (pendingOrderId is 1-based)
-							const orderIdForConfirm = listing.pendingOrderId - 1n;
+							// orderId passed to fulfill is 0-based (pendingOrderId is 1-based)
+							const orderIdForFulfill = listing.pendingOrderId - 1n;
+							const hasKey = !!localStorage.getItem(
+								`aes-key:${ethRpcUrl}:${listing.id}`,
+							);
 
 							return (
 								<div
@@ -428,11 +475,18 @@ export default function PatientDashboard() {
 											{formatEther(listing.price)} PAS
 										</span>{" "}
 										| Listing #{listing.id.toString()}
+										{!hasKey && listing.active && hasPendingOrder && (
+											<span className="ml-2 text-accent-red text-xs">
+												(key not found in this browser)
+											</span>
+										)}
 									</p>
 
 									{listing.active && hasPendingOrder && (
 										<button
-											onClick={() => confirmSale(orderIdForConfirm)}
+											onClick={() =>
+												fulfillOrder(orderIdForFulfill, listing.id)
+											}
 											className="btn-accent text-xs px-3 py-1"
 											style={{
 												background:
@@ -441,7 +495,7 @@ export default function PatientDashboard() {
 													"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 											}}
 										>
-											Confirm Sale (Order #{orderIdForConfirm.toString()})
+											Submit Key (Order #{orderIdForFulfill.toString()})
 										</button>
 									)}
 

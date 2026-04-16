@@ -8,7 +8,7 @@ use clap::Subcommand;
 alloy::sol! {
     event ListingCreated(address indexed patient, uint256 indexed listingId, bytes32 statementHash, uint256 price);
     event OrderPlaced(uint256 indexed listingId, uint256 indexed orderId, address indexed researcher, uint256 amount);
-    event SaleConfirmed(uint256 indexed orderId, uint256 indexed listingId, address patient, address researcher);
+    event SaleFulfilled(uint256 indexed orderId, uint256 indexed listingId, address patient, address researcher, bytes32 decryptionKey);
     event ListingCancelled(uint256 indexed listingId, address indexed patient);
     event ProofSubmitted(address indexed owner, bytes32 indexed hash);
 }
@@ -50,13 +50,14 @@ fn decode_log(topics: &[FixedBytes<32>], data: &Bytes) -> Option<String> {
             format_ether(e.amount),
         ));
     }
-    if let Ok(e) = SaleConfirmed::decode_raw_log(topics, data) {
+    if let Ok(e) = SaleFulfilled::decode_raw_log(topics, data) {
         return Some(format!(
-            "MedicalMarket.SaleConfirmed\n    orderId:    {}\n    listingId:  {}\n    patient:    {}\n    researcher: {}",
+            "MedicalMarket.SaleFulfilled\n    orderId:    {}\n    listingId:  {}\n    patient:    {}\n    researcher: {}\n    key:        {:#x}",
             e.orderId,
             e.listingId,
             e.patient,
             e.researcher,
+            e.decryptionKey,
         ));
     }
     if let Ok(e) = ListingCancelled::decode_raw_log(topics, data) {

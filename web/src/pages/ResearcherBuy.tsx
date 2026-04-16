@@ -197,7 +197,23 @@ export default function ResearcherBuy() {
 			})) as [string, bigint, string, boolean];
 			const statementHash = listingResult[0] as string;
 
-			setTxStatus("Fetching statements from node...");
+			// Fetch the AES-256-GCM decryption key posted by the patient
+			setTxStatus("Reading decryption key from contract...");
+			const keyHex = (await client.readContract({
+				address: addr,
+				abi: medicalMarketAbi,
+				functionName: "getDecryptionKey",
+				args: [order.id],
+			})) as `0x${string}`;
+
+			if (keyHex === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+				setTxStatus(
+					"Error: Decryption key not posted yet. Wait for the patient to submit the key.",
+				);
+				return;
+			}
+
+			setTxStatus("Fetching encrypted data from Statement Store...");
 			const statements = await fetchStatements(wsUrl);
 			const match = statements.find((s) => s.hash === statementHash);
 
@@ -212,16 +228,38 @@ export default function ResearcherBuy() {
 				return;
 			}
 
-			const json = new TextDecoder().decode(match.data);
+			// Decrypt: data = [12-byte IV] + [AES-GCM ciphertext]
+			setTxStatus("Decrypting...");
+			const keyBytes = hexToBytes(keyHex);
+			const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, [
+				"decrypt",
+			]);
+			const iv = match.data.slice(0, 12);
+			const ciphertext = match.data.slice(12);
+			const plaintextBuf = await crypto.subtle.decrypt(
+				{ name: "AES-GCM", iv },
+				cryptoKey,
+				ciphertext,
+			);
+			const json = new TextDecoder().decode(plaintextBuf);
 			setRetrievedData((prev) => ({
 				...prev,
 				[order.id.toString()]: { orderId: order.id, json },
 			}));
-			setTxStatus("Data retrieved successfully!");
+			setTxStatus("Data decrypted successfully!");
 		} catch (e) {
 			console.error("retrieveData failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		}
+	}
+
+	function hexToBytes(hex: string): Uint8Array {
+		const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+		const out = new Uint8Array(clean.length / 2);
+		for (let i = 0; i < out.length; i++) {
+			out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+		}
+		return out;
 	}
 
 	function truncate(addr: string) {
@@ -245,8 +283,8 @@ export default function ResearcherBuy() {
 			<div className="space-y-2">
 				<h1 className="page-title text-accent-blue">Researcher Dashboard</h1>
 				<p className="text-text-secondary">
-					Browse active medical data listings, place buy orders, and retrieve confirmed
-					data from the Statement Store.
+					Browse active medical data listings, place buy orders, and decrypt confirmed
+					data using the key the patient posts on-chain.
 				</p>
 			</div>
 

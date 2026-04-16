@@ -38,6 +38,11 @@ enum Commands {
 	/// All-in-one: hash a file, create a claim, and optionally upload to Bulletin Chain /
 	/// Statement Store
 	Prove(commands::prove::ProveArgs),
+	/// Statement Store commands
+	Statement {
+		#[command(subcommand)]
+		action: commands::statement::StatementAction,
+	},
 	/// Medical marketplace commands
 	Market {
 		#[command(subcommand)]
@@ -61,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			commands::contract::run(action, &cli.eth_rpc_url, &cli.url).await?
 		},
 		Commands::Prove(args) => commands::prove::run(args, &cli.url, &cli.eth_rpc_url).await?,
+		Commands::Statement { action } => commands::statement::run(action, &cli.url).await?,
 		Commands::Market { action } => commands::market::run(action, &cli.eth_rpc_url).await?,
 		Commands::Tx { action } => commands::tx::run(action, &cli.eth_rpc_url).await?,
 	}

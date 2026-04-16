@@ -12,17 +12,18 @@ alloy::sol! {
 	contract MedicalMarket {
 		function createListing(bytes32 statementHash, uint256 price) external;
 		function placeBuyOrder(uint256 listingId) external payable;
-		function confirmSale(uint256 orderId) external;
+		function fulfill(uint256 orderId, bytes32 decryptionKey) external;
 		function cancelListing(uint256 listingId) external;
 		function getListing(uint256 id) external view returns (bytes32 statementHash, uint256 price, address patient, bool active);
 		function getListingCount() external view returns (uint256);
 		function getOrder(uint256 id) external view returns (uint256 listingId, address researcher, uint256 amount, bool confirmed, bool cancelled);
+		function getDecryptionKey(uint256 orderId) external view returns (bytes32);
 		function getOrderCount() external view returns (uint256);
 		function getPendingOrderId(uint256 listingId) external view returns (uint256);
 
 		event ListingCreated(address indexed patient, uint256 indexed listingId, bytes32 statementHash, uint256 price);
 		event OrderPlaced(uint256 indexed listingId, uint256 indexed orderId, address indexed researcher, uint256 amount);
-		event SaleConfirmed(uint256 indexed orderId, uint256 indexed listingId, address patient, address researcher);
+		event SaleFulfilled(uint256 indexed orderId, uint256 indexed listingId, address patient, address researcher, bytes32 decryptionKey);
 		event ListingCancelled(uint256 indexed listingId, address indexed patient);
 	}
 }
@@ -69,10 +70,12 @@ pub enum MarketAction {
 		#[arg(long, short, default_value = "bob")]
 		signer: String,
 	},
-	/// Confirm a sale (patient action)
-	ConfirmSale {
-		/// Order ID to confirm
+	/// Fulfill a sale by posting the AES-256-GCM decryption key (patient action)
+	Fulfill {
+		/// Order ID to fulfill
 		order_id: u64,
+		/// 0x-prefixed 32-byte AES-256-GCM decryption key
+		decryption_key: String,
 		/// Signer: dev name (alice/bob/charlie) or 0x private key
 		#[arg(long, short, default_value = "alice")]
 		signer: String,
@@ -229,6 +232,11 @@ pub async fn run(
 			println!("Researcher:   {}", result.researcher);
 			println!("Amount:       {} ETH", format_ether(result.amount));
 			println!("Status:       {status}");
+
+			if result.confirmed {
+				let key = contract.getDecryptionKey(U256::from(id)).call().await?;
+				println!("Decryption key: {:#x}", key);
+			}
 		},
 
 		MarketAction::CreateListing { statement_hash, price, signer } => {
@@ -282,15 +290,16 @@ pub async fn run(
 			);
 		},
 
-		MarketAction::ConfirmSale { order_id, signer } => {
+		MarketAction::Fulfill { order_id, decryption_key, signer } => {
 			let contract_addr = load_market_address()?;
+			let key_bytes: alloy::primitives::FixedBytes<32> = decryption_key.parse()?;
 			let wallet = alloy::network::EthereumWallet::from(resolve_signer(&signer)?);
 			let provider =
 				ProviderBuilder::new().wallet(wallet).connect_http(eth_rpc_url.parse()?);
 			let contract = MedicalMarket::new(contract_addr, &provider);
 
-			println!("Confirming sale for order #{order_id}...");
-			let pending = contract.confirmSale(U256::from(order_id)).send().await?;
+			println!("Fulfilling order #{order_id} with decryption key...");
+			let pending = contract.fulfill(U256::from(order_id), key_bytes).send().await?;
 			let receipt = pending.get_receipt().await?;
 			println!(
 				"Confirmed in block {}: tx {}",

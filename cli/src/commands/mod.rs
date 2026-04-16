@@ -3,6 +3,7 @@ pub mod contract;
 pub mod market;
 pub mod pallet;
 pub mod prove;
+pub mod statement;
 pub mod tx;
 
 use alloy::sol;
