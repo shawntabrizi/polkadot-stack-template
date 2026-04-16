@@ -9,6 +9,7 @@ interface Listing {
 	id: bigint;
 	merkleRoot: `0x${string}`;
 	statementHash: `0x${string}`;
+	title: string;
 	price: bigint;
 	patient: Address;
 	active: boolean;
@@ -105,8 +106,8 @@ export default function ResearcherBuy() {
 					abi: medicalMarketAbi,
 					functionName: "getListing",
 					args: [i],
-				})) as [string, string, bigint, string, boolean];
-				const [merkleRoot, statementHash, price, patient, active] = result;
+				})) as [string, string, string, bigint, string, boolean];
+				const [merkleRoot, statementHash, title, price, patient, active] = result;
 				if (!active) continue;
 				const pendingOrderId = (await client.readContract({
 					address: addr,
@@ -118,6 +119,7 @@ export default function ResearcherBuy() {
 					id: i,
 					merkleRoot: merkleRoot as `0x${string}`,
 					statementHash: statementHash as `0x${string}`,
+					title,
 					price,
 					patient: patient as Address,
 					active,
@@ -184,6 +186,30 @@ export default function ResearcherBuy() {
 		}
 	}
 
+	async function cancelOrder(order: Order) {
+		if (!contractAddress) return;
+		try {
+			setTxStatus(`Cancelling order #${order.id} and requesting refund...`);
+			const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
+			const hash = await walletClient.writeContract({
+				address: contractAddress as Address,
+				abi: medicalMarketAbi,
+				functionName: "cancelOrder",
+				args: [order.id],
+			});
+			setTxStatus(`Transaction submitted: ${hash}`);
+			const publicClient = getPublicClient(ethRpcUrl);
+			await publicClient.waitForTransactionReceipt({ hash });
+			setTxStatus(
+				`Order #${order.id} cancelled — ${formatEther(order.amount)} PAS refunded.`,
+			);
+			loadAll();
+		} catch (e) {
+			console.error("cancelOrder failed:", e);
+			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
 	async function retrieveData(order: Order) {
 		if (!contractAddress) return;
 		try {
@@ -196,7 +222,7 @@ export default function ResearcherBuy() {
 				abi: medicalMarketAbi,
 				functionName: "getListing",
 				args: [order.listingId],
-			})) as [string, string, bigint, string, boolean];
+			})) as [string, string, string, bigint, string, boolean];
 			const statementHash = listingResult[1] as string;
 
 			// Fetch the AES-256-GCM decryption key posted by the patient
@@ -357,18 +383,23 @@ export default function ResearcherBuy() {
 								key={listing.id.toString()}
 								className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm space-y-1.5"
 							>
-								<div className="flex items-center justify-between gap-2">
-									<span className="text-text-tertiary font-medium">
-										Listing #{listing.id.toString()}
-									</span>
+								<div className="flex items-start justify-between gap-2">
+									<div>
+										<p className="text-text-primary font-medium">
+											{listing.title}
+										</p>
+										<p className="text-text-tertiary text-xs mt-0.5">
+											Listing #{listing.id.toString()}
+										</p>
+									</div>
 									{listing.pendingOrderId > 0n ? (
-										<span className="px-2 py-0.5 rounded-full bg-white/[0.04] text-text-muted text-xs font-medium">
+										<span className="px-2 py-0.5 rounded-full bg-white/[0.04] text-text-muted text-xs font-medium whitespace-nowrap">
 											Pending order
 										</span>
 									) : (
 										<button
 											onClick={() => placeBuyOrder(listing)}
-											className="btn-accent text-xs px-3 py-1"
+											className="btn-accent text-xs px-3 py-1 whitespace-nowrap"
 											style={{
 												background:
 													"linear-gradient(135deg, #4cc2ff 0%, #0090d4 100%)",
@@ -380,7 +411,7 @@ export default function ResearcherBuy() {
 										</button>
 									)}
 								</div>
-								<p className="font-mono text-xs text-text-secondary break-all">
+								<p className="font-mono text-xs text-text-muted break-all">
 									Root: {listing.merkleRoot.slice(0, 18)}…
 									{listing.merkleRoot.slice(-8)}
 								</p>
@@ -438,6 +469,14 @@ export default function ResearcherBuy() {
 											{formatEther(order.amount)} PAS
 										</span>
 									</p>
+									{!order.confirmed && !order.cancelled && (
+										<button
+											onClick={() => cancelOrder(order)}
+											className="px-2 py-1 rounded-md bg-accent-red/10 text-accent-red text-xs font-medium hover:bg-accent-red/20 transition-colors mt-1"
+										>
+											Cancel &amp; Refund
+										</button>
+									)}
 									{order.confirmed && !retrieved && (
 										<button
 											onClick={() => retrieveData(order)}

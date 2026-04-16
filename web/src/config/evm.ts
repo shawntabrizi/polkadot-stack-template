@@ -52,6 +52,7 @@ export const medicalMarketAbi = [
 		inputs: [
 			{ name: "merkleRoot", type: "bytes32" },
 			{ name: "statementHash", type: "bytes32" },
+			{ name: "title", type: "string" },
 			{ name: "price", type: "uint256" },
 		],
 		outputs: [],
@@ -90,11 +91,19 @@ export const medicalMarketAbi = [
 	},
 	{
 		type: "function",
+		name: "cancelOrder",
+		inputs: [{ name: "orderId", type: "uint256" }],
+		outputs: [],
+		stateMutability: "nonpayable",
+	},
+	{
+		type: "function",
 		name: "getListing",
 		inputs: [{ name: "id", type: "uint256" }],
 		outputs: [
 			{ name: "merkleRoot", type: "bytes32" },
 			{ name: "statementHash", type: "bytes32" },
+			{ name: "title", type: "string" },
 			{ name: "price", type: "uint256" },
 			{ name: "patient", type: "address" },
 			{ name: "active", type: "bool" },
@@ -143,6 +152,7 @@ export const medicalMarketAbi = [
 			{ name: "listingId", type: "uint256", indexed: true },
 			{ name: "merkleRoot", type: "bytes32", indexed: false },
 			{ name: "statementHash", type: "bytes32", indexed: false },
+			{ name: "title", type: "string", indexed: false },
 			{ name: "price", type: "uint256", indexed: false },
 		],
 	},
@@ -173,6 +183,16 @@ export const medicalMarketAbi = [
 		inputs: [
 			{ name: "listingId", type: "uint256", indexed: true },
 			{ name: "patient", type: "address", indexed: true },
+		],
+	},
+	{
+		type: "event",
+		name: "OrderCancelled",
+		inputs: [
+			{ name: "orderId", type: "uint256", indexed: true },
+			{ name: "listingId", type: "uint256", indexed: true },
+			{ name: "researcher", type: "address", indexed: true },
+			{ name: "amount", type: "uint256", indexed: false },
 		],
 	},
 ] as const;

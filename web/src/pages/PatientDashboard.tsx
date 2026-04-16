@@ -20,6 +20,7 @@ interface SignedPackage {
 interface Listing {
 	id: bigint;
 	merkleRoot: `0x${string}`;
+	title: string;
 	price: bigint;
 	patient: string;
 	active: boolean;
@@ -71,6 +72,7 @@ export default function PatientDashboard() {
 	const [importedPackage, setImportedPackage] = useState<SignedPackage | null>(null);
 	const [packageParseError, setPackageParseError] = useState<string | null>(null);
 	const [statementStoreAvailable, setStatementStoreAvailable] = useState<boolean | null>(null);
+	const [titleStr, setTitleStr] = useState("");
 	const [priceStr, setPriceStr] = useState("");
 	const [listings, setListings] = useState<Listing[]>([]);
 	const [txStatus, setTxStatus] = useState<string | null>(null);
@@ -177,9 +179,9 @@ export default function PatientDashboard() {
 					abi: medicalMarketAbi,
 					functionName: "getListing",
 					args: [i],
-				})) as readonly [`0x${string}`, `0x${string}`, bigint, string, boolean];
+				})) as readonly [`0x${string}`, `0x${string}`, string, bigint, string, boolean];
 
-				const [merkleRoot, , price, patient, active] = rawTuple;
+				const [merkleRoot, , title, price, patient, active] = rawTuple;
 
 				// Only include listings belonging to the current account
 				if (patient.toLowerCase() !== currentAddress.toLowerCase()) continue;
@@ -194,6 +196,7 @@ export default function PatientDashboard() {
 				result.push({
 					id: i,
 					merkleRoot,
+					title,
 					price,
 					patient,
 					active,
@@ -216,6 +219,10 @@ export default function PatientDashboard() {
 		}
 		if (!fileBytes || !importedPackage) {
 			setTxStatus("Error: Drop a medic-signed record first");
+			return;
+		}
+		if (!titleStr.trim()) {
+			setTxStatus("Error: Enter a title for the listing");
 			return;
 		}
 		if (!priceStr || isNaN(Number(priceStr)) || Number(priceStr) <= 0) {
@@ -252,6 +259,7 @@ export default function PatientDashboard() {
 				args: [
 					importedPackage.merkleRoot as `0x${string}`,
 					ciphertextHash,
+					titleStr.trim(),
 					parseEther(priceStr),
 				],
 			});
@@ -272,6 +280,7 @@ export default function PatientDashboard() {
 				"Listing created! Keep this tab open — you'll need to submit the key when a researcher pays.",
 			);
 			setFileBytes(null);
+			setTitleStr("");
 			setPriceStr("");
 			loadListings();
 		} catch (e) {
@@ -435,6 +444,17 @@ export default function PatientDashboard() {
 				)}
 
 				<div>
+					<label className="label">Title</label>
+					<input
+						type="text"
+						value={titleStr}
+						onChange={(e) => setTitleStr(e.target.value)}
+						placeholder="e.g. Type 2 Diabetes Cohort — HbA1c + BMI"
+						className="input-field w-full"
+					/>
+				</div>
+
+				<div>
 					<label className="label">Price (PAS)</label>
 					<input
 						type="text"
@@ -503,10 +523,15 @@ export default function PatientDashboard() {
 									className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm space-y-1.5"
 								>
 									<div className="flex items-center justify-between gap-2">
-										<p className="font-mono text-xs text-text-secondary break-all">
-											{listing.merkleRoot.slice(0, 18)}…
-											{listing.merkleRoot.slice(-8)}
-										</p>
+										<div>
+											<p className="text-text-primary font-medium text-sm">
+												{listing.title}
+											</p>
+											<p className="font-mono text-xs text-text-muted mt-0.5">
+												{listing.merkleRoot.slice(0, 18)}…
+												{listing.merkleRoot.slice(-8)}
+											</p>
+										</div>
 										<span
 											className={`text-xs font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${
 												!listing.active

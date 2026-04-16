@@ -14,7 +14,8 @@ contract MedicalMarket {
 	struct Listing {
 		bytes32 merkleRoot; // Poseidon Merkle root of the signed JSON record fields
 		bytes32 statementHash; // blake2b-256 of the AES-GCM ciphertext (Statement Store lookup key)
-		uint256 price; // price in wei (native PAS)
+		string title; // short human-readable label visible to researchers before buying
+		uint256 price; // minimum price in wei (native PAS)
 		address patient;
 		bool active; // false if cancelled or already fulfilled
 	}
@@ -42,6 +43,7 @@ contract MedicalMarket {
 		uint256 indexed listingId,
 		bytes32 merkleRoot,
 		bytes32 statementHash,
+		string title,
 		uint256 price
 	);
 	event OrderPlaced(
@@ -58,23 +60,37 @@ contract MedicalMarket {
 		bytes32 decryptionKey
 	);
 	event ListingCancelled(uint256 indexed listingId, address indexed patient);
+	event OrderCancelled(
+		uint256 indexed orderId,
+		uint256 indexed listingId,
+		address indexed researcher,
+		uint256 amount
+	);
 
 	/// @notice Create a new listing for an encrypted record at the given price.
 	/// @param merkleRoot The Poseidon Merkle root of the signed JSON record fields.
 	/// @param statementHash The blake2b-256 hash of the AES-GCM ciphertext in the Statement Store (lookup key).
-	/// @param price The sale price in wei (native PAS). Must be greater than zero.
-	function createListing(bytes32 merkleRoot, bytes32 statementHash, uint256 price) external {
+	/// @param title Short human-readable label shown to researchers before buying.
+	/// @param price Minimum price in wei (native PAS). Must be greater than zero.
+	function createListing(
+		bytes32 merkleRoot,
+		bytes32 statementHash,
+		string calldata title,
+		uint256 price
+	) external {
 		require(price > 0, "Price must be greater than zero");
+		require(bytes(title).length > 0, "Title cannot be empty");
 		uint256 listingId = listingCount;
 		listings[listingId] = Listing({
 			merkleRoot: merkleRoot,
 			statementHash: statementHash,
+			title: title,
 			price: price,
 			patient: msg.sender,
 			active: true
 		});
 		listingCount++;
-		emit ListingCreated(msg.sender, listingId, merkleRoot, statementHash, price);
+		emit ListingCreated(msg.sender, listingId, merkleRoot, statementHash, title, price);
 	}
 
 	/// @notice Lock native PAS as payment for a listing. Only one order may be pending per listing.
@@ -151,11 +167,31 @@ contract MedicalMarket {
 		emit ListingCancelled(listingId, msg.sender);
 	}
 
+	/// @notice Cancel a pending order and refund the locked funds to the researcher.
+	///         Also unblocks the listing so new orders can be placed.
+	/// @param orderId The ID of the order to cancel.
+	function cancelOrder(uint256 orderId) external {
+		require(orderId < orderCount, "Order does not exist");
+		Order storage order = orders[orderId];
+		require(msg.sender == order.researcher, "Only the researcher can cancel the order");
+		require(!order.confirmed, "Order already fulfilled");
+		require(!order.cancelled, "Order already cancelled");
+
+		order.cancelled = true;
+		listingPendingOrder[order.listingId] = 0;
+
+		(bool success, ) = order.researcher.call{value: order.amount}("");
+		require(success, "Refund to researcher failed");
+
+		emit OrderCancelled(orderId, order.listingId, order.researcher, order.amount);
+	}
+
 	/// @notice Get the details of a listing.
 	/// @param id The listing ID.
 	/// @return merkleRoot The Poseidon Merkle root of the signed record fields.
 	/// @return statementHash The blake2b-256 hash of the AES-GCM ciphertext (Statement Store lookup key).
-	/// @return price The sale price in wei.
+	/// @return title The human-readable label set by the patient.
+	/// @return price The minimum price in wei.
 	/// @return patient The address of the patient who created the listing.
 	/// @return active Whether the listing is still open.
 	function getListing(
@@ -166,13 +202,14 @@ contract MedicalMarket {
 		returns (
 			bytes32 merkleRoot,
 			bytes32 statementHash,
+			string memory title,
 			uint256 price,
 			address patient,
 			bool active
 		)
 	{
 		Listing storage l = listings[id];
-		return (l.merkleRoot, l.statementHash, l.price, l.patient, l.active);
+		return (l.merkleRoot, l.statementHash, l.title, l.price, l.patient, l.active);
 	}
 
 	/// @notice Get the total number of listings ever created.
