@@ -70,7 +70,7 @@ The repo root includes `.nvmrc`, and the JavaScript projects declare `engines.no
 
 Zombienet runs the **`polkadot`** relay binary; local dev uses **`polkadot-omni-node`**. Contract tooling expects **`eth-rpc`** (Ethereum JSON-RPC on port `8545` by default). All must match **[polkadot-stable2512-3](https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2512-3)**.
 
-**Recommended for this repo:** run from the repository root:
+**Primary supported path for this repo:** run from the repository root:
 
 ```bash
 ./scripts/download-sdk-binaries.sh
@@ -78,17 +78,7 @@ Zombienet runs the **`polkadot`** relay binary; local dev uses **`polkadot-omni-
 
 That fetches `polkadot`, `polkadot-prepare-worker`, `polkadot-execute-worker`, `polkadot-omni-node`, and `eth-rpc` into **`./bin/`** (gitignored). The stack scripts prepend `./bin` on `PATH` when **`STACK_DOWNLOAD_SDK_BINARIES=1`** (default). The relay binary requires the two **worker** binaries in the **same directory** as `polkadot`; the script places them together.
 
-If you install binaries yourself, keep the same release for every binary and put relay + workers on `PATH` side by side. Prebuilt assets are on the [release page](https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2512-3); platform support matches the script (macOS Apple Silicon and Linux x86_64).
-
-**Build from source** (optional):
-
-```bash
-cargo install --git https://github.com/paritytech/polkadot-sdk --tag polkadot-stable2512-3 polkadot --locked
-cargo install --git https://github.com/paritytech/polkadot-sdk --tag polkadot-stable2512-3 polkadot-omni-node --locked
-cargo install --git https://github.com/paritytech/polkadot-sdk --tag polkadot-stable2512-3 pallet-revive-eth-rpc --locked
-```
-
-Building `polkadot` from source produces the worker binaries alongside it.
+Platform support for the downloader matches the script today: macOS Apple Silicon and Linux x86_64. If your platform cannot use the downloader-managed binaries, see [Manual Binary Fallback (limited support)](#manual-binary-fallback-limited-support) at the end of this guide.
 
 **Verify versions** (from the repository root, using the downloaded binaries):
 
@@ -316,7 +306,7 @@ npx hardhat verify --network polkadotTestnet DEPLOYED_CONTRACT_ADDRESS
 
 ### "Missing required set_validation_data inherent"
 
-Your `polkadot-omni-node` version doesn't match the runtime. Download the correct version from the [stable2512-3 release](https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2512-3).
+Your `polkadot-omni-node` version doesn't match the runtime. Re-run `./scripts/download-sdk-binaries.sh` to install the repo-supported binary set.
 
 ### "Failed to retrieve the parachain id"
 
@@ -350,7 +340,7 @@ In polkadot-sdk stable2512-3, `--enable-statement-store` is silently ignored in 
 
 ### "Worker binaries could not be found"
 
-The `polkadot` binary requires `polkadot-prepare-worker` and `polkadot-execute-worker` in the **same directory** on your `PATH`. Without them, relay validators fail at startup. Use `./scripts/download-sdk-binaries.sh` (or install matching artifacts from the [stable2512-3 release](https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2512-3) next to `polkadot`).
+The `polkadot` binary requires `polkadot-prepare-worker` and `polkadot-execute-worker` in the **same directory** on your `PATH`. Without them, relay validators fail at startup. Re-run `./scripts/download-sdk-binaries.sh` so the repo-local `./bin/` directory contains all three matching binaries.
 
 ### Parachain stalls at block 0 on Zombienet
 
@@ -369,4 +359,48 @@ The frontend now fails fast if PAPI code generation fails. Regenerate the metada
 cd web
 npm run update-types
 npm run codegen
+```
+
+## Manual Binary Fallback (limited support)
+
+Use this section only if the downloader-managed binaries do not work for your platform or environment. The repo is primarily tested with `./scripts/download-sdk-binaries.sh`, and the stack scripts assume the repo-local `./bin/` toolchain by default.
+
+If you use this fallback path:
+
+- Keep every SDK binary on the same `polkadot-stable2512-3` release line.
+- Keep `polkadot`, `polkadot-prepare-worker`, and `polkadot-execute-worker` in the same directory on `PATH`.
+- Set `STACK_DOWNLOAD_SDK_BINARIES=0` before running the stack scripts so they use your manually managed binaries instead of trying to populate `./bin/`.
+
+### Prebuilt release artifacts
+
+If the [stable2512-3 release page](https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2512-3) has assets for your platform, install matching copies of:
+
+- `polkadot`
+- `polkadot-prepare-worker`
+- `polkadot-execute-worker`
+- `polkadot-omni-node`
+- `eth-rpc`
+
+Place them together on your `PATH`, then verify:
+
+```bash
+polkadot --version
+polkadot-omni-node --version
+eth-rpc --version
+```
+
+### Build from source
+
+If your platform does not have suitable release assets, you can build the binaries from source:
+
+```bash
+cargo install --git https://github.com/paritytech/polkadot-sdk --tag polkadot-stable2512-3 polkadot --locked
+cargo install --git https://github.com/paritytech/polkadot-sdk --tag polkadot-stable2512-3 polkadot-omni-node --locked
+cargo install --git https://github.com/paritytech/polkadot-sdk --tag polkadot-stable2512-3 pallet-revive-eth-rpc --locked
+```
+
+Building `polkadot` from source also produces the worker binaries alongside it. After installing everything, run the stack scripts with:
+
+```bash
+STACK_DOWNLOAD_SDK_BINARIES=0 ./scripts/start-all.sh
 ```
