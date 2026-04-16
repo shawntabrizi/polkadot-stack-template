@@ -257,6 +257,7 @@ async function getChain(ethRpcUrl = getStoredEthRpcUrl()): Promise<Chain> {
 	return chainCache;
 }
 
+/** @deprecated Use PAPI Revive.call() for medical marketplace pages. Kept for PoE scaffold. */
 export async function getWalletClient(accountIndex: number, ethRpcUrl = getStoredEthRpcUrl()) {
 	const chain = await getChain(ethRpcUrl);
 	return createWalletClient({

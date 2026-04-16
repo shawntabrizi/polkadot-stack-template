@@ -7,39 +7,107 @@ import {
 } from "@polkadot-labs/hdkd-helpers";
 import { getPolkadotSigner } from "polkadot-api/signer";
 import { type PolkadotSigner } from "polkadot-api";
+import { connectInjectedExtension, getInjectedExtensions } from "polkadot-api/pjs-signer";
+import { injectSpektrExtension, SpektrExtensionName } from "@novasamatech/product-sdk";
 
 // Dev accounts derived from the well-known dev seed phrase
 const entropy = mnemonicToEntropy(DEV_PHRASE);
 const miniSecret = entropyToMiniSecret(entropy);
 const derive = sr25519CreateDerive(miniSecret);
 
-export type DevAccount = {
+/**
+ * Derive the EVM H160 address from a 32-byte Substrate public key.
+ * Uses pallet-revive DefaultAddressMapper: H160 = last 20 bytes of AccountId32.
+ */
+export function substrateToH160(publicKey: Uint8Array): `0x${string}` {
+	const last20 = publicKey.slice(12);
+	return `0x${Array.from(last20)
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("")}` as `0x${string}`;
+}
+
+export type AppAccount = {
 	name: string;
+	/** SS58-encoded Substrate address */
 	address: string;
 	signer: PolkadotSigner;
+	/** H160 address as seen by pallet-revive contracts (DefaultAddressMapper) */
+	evmAddress: `0x${string}`;
 };
 
-function createDevAccount(name: string, path: string): DevAccount {
+/** @deprecated Use AppAccount */
+export type DevAccount = AppAccount;
+
+function createDevAccount(name: string, path: string): AppAccount {
 	const keypair = derive(path);
 	return {
 		name,
 		address: ss58Address(keypair.publicKey),
 		signer: getPolkadotSigner(keypair.publicKey, "Sr25519", keypair.sign),
+		evmAddress: substrateToH160(keypair.publicKey),
 	};
 }
 
-export const devAccounts: DevAccount[] = [
+export const devAccounts: AppAccount[] = [
 	createDevAccount("Alice", "//Alice"),
 	createDevAccount("Bob", "//Bob"),
 	createDevAccount("Charlie", "//Charlie"),
 ];
 
+/**
+ * Resolve accounts via:
+ *   1. Nova Wallet / Spektr (product-sdk) — when running in the Host webview/iframe
+ *   2. Browser extension wallets (Polkadot.js, Talisman, SubWallet)
+ *   3. Dev accounts (local only)
+ */
+export async function getAccountsWithFallback(): Promise<AppAccount[]> {
+	// 1. Nova Wallet / Spektr
+	try {
+		const ready = await injectSpektrExtension();
+		if (ready) {
+			const ext = await connectInjectedExtension(SpektrExtensionName);
+			const accounts = ext.getAccounts();
+			if (accounts.length > 0) {
+				return accounts.map((acc) => ({
+					name: acc.name ?? `${acc.address.slice(0, 6)}…${acc.address.slice(-4)}`,
+					address: acc.address,
+					signer: acc.polkadotSigner,
+					evmAddress: substrateToH160(acc.polkadotSigner.publicKey),
+				}));
+			}
+		}
+	} catch {
+		// Not in Nova Wallet — fall through
+	}
+
+	// 2. Browser extension wallets
+	try {
+		const extensions = getInjectedExtensions().filter((n) => n !== SpektrExtensionName);
+		if (extensions.length > 0) {
+			const ext = await connectInjectedExtension(extensions[0]);
+			const accounts = ext.getAccounts();
+			if (accounts.length > 0) {
+				return accounts.map((acc) => ({
+					name: acc.name ?? `${acc.address.slice(0, 6)}…${acc.address.slice(-4)}`,
+					address: acc.address,
+					signer: acc.polkadotSigner,
+					evmAddress: substrateToH160(acc.polkadotSigner.publicKey),
+				}));
+			}
+		}
+	} catch {
+		// No extension found — fall through
+	}
+
+	// 3. Dev accounts
+	return devAccounts;
+}
+
 const devPaths = ["//Alice", "//Bob", "//Charlie"];
 
 /**
  * Get the raw sr25519 keypair for a dev account by index.
- * Returns publicKey and sign function for use outside of PAPI transactions
- * (e.g., signing Statement Store statements).
+ * @deprecated Prefer using AppAccount.signer for signing.
  */
 export function getDevKeypair(index: number): {
 	publicKey: Uint8Array;
