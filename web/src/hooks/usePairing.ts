@@ -1,5 +1,12 @@
-import { useSyncExternalStore } from "react";
-import { createPappAdapter, type UserSession, type PairingStatus } from "@novasamatech/host-papp";
+import { useSyncExternalStore, useState, useEffect } from "react";
+import {
+	createPappAdapter,
+	SS_PASEO_STABLE_STAGE_ENDPOINTS,
+	type UserSession,
+	type PairingStatus,
+} from "@novasamatech/host-papp";
+import { createLazyClient } from "@novasamatech/statement-store";
+import { getWsProvider } from "polkadot-api/ws-provider/web";
 import { createLocalStorageAdapter } from "@novasamatech/storage-adapter";
 import { ss58Address } from "@polkadot-labs/hdkd-helpers";
 import type { PolkadotSigner } from "polkadot-api";
@@ -7,9 +14,8 @@ import type { SigningPayloadRequest } from "@novasamatech/host-papp";
 import { substrateToH160, type AppAccount } from "./useAccount";
 
 // Singleton — one adapter per browser session.
-// Statement store and lazyClient use host-papp defaults:
-// wss://pop3-testnet.parity-lab.parity.io/people (Parity testnet).
-// This is publicly reachable by the phone — no local node required for pairing.
+// Uses Paseo People chain as statement store (publicly reachable by phone).
+// Default was pop3-testnet.parity-lab.parity.io which is unreliable.
 let adapter: ReturnType<typeof createPappAdapter> | null = null;
 
 export function getPappAdapter() {
@@ -20,8 +26,11 @@ export function getPappAdapter() {
 			// Nova Wallet fetches name + icon from this URL during the pairing UI.
 			metadata: `${window.location.origin}/nova-metadata.json`,
 			adapters: {
-				// Persist sessions across page reloads.
 				storage: createLocalStorageAdapter("pmp:"),
+				// Use Paseo People chain — more stable than the default Parity testnet.
+				// Cast needed: statement-store bundles polkadot-api v2 while our app uses v1.
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				lazyClient: createLazyClient(getWsProvider(SS_PASEO_STABLE_STAGE_ENDPOINTS) as any),
 			},
 		});
 	}
@@ -35,6 +44,18 @@ export function usePairingStatus(): PairingStatus {
 		getPappAdapter().sso.pairingStatus.subscribe,
 		getPappAdapter().sso.pairingStatus.read,
 	);
+}
+
+/** React hook — subscribes to the list of live persisted sessions.
+ *  Survives page navigation because sessions are backed by localStorage. */
+export function useActiveSessions(): UserSession[] {
+	const [sessions, setSessions] = useState<UserSession[]>(() =>
+		getPappAdapter().sessions.sessions.read(),
+	);
+	useEffect(() => {
+		return getPappAdapter().sessions.sessions.subscribe(setSessions);
+	}, []);
+	return sessions;
 }
 
 /** Build an AppAccount from a live UserSession after pairing completes. */

@@ -85,7 +85,7 @@ if curl -s -o /dev/null "$SUBSTRATE_RPC_HTTP" 2>/dev/null; then
 fi
 
 export_frontend_runtime_env
-npm run dev -- --host 127.0.0.1 --port "$STACK_FRONTEND_PORT" &
+npm run dev -- --host 0.0.0.0 --port "$STACK_FRONTEND_PORT" &
 FRONTEND_PID=$!
 log_info "Frontend starting at $FRONTEND_URL"
 
