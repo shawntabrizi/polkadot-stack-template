@@ -1,4 +1,4 @@
-import snarkjs from "snarkjs";
+import * as snarkjs from "snarkjs";
 import { LeanIMT } from "@zk-kit/lean-imt";
 import { poseidon2 } from "poseidon-lite";
 import { blake2b } from "blakejs";
