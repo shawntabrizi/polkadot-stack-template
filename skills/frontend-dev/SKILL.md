@@ -39,13 +39,13 @@ All three pages are **fully implemented and wired to the live contract**.
 
 | Page | Route | Role | Status |
 |---|---|---|---|
-| `PatientDashboard.tsx` | `/patient` | Patient (Alice) | Live — Phase 1 |
+| `PatientDashboard.tsx` | `/patient` | Patient (Alice) | Live — Phase 3 (ZK fulfill) |
 | `MedicSign.tsx` | `/medic` | Medic (any) | Live — Phase 1 |
 | `ResearcherBuy.tsx` | `/researcher` | Researcher (Bob) | Live — Phase 1 |
 
 ---
 
-## Phase 1 Data Flow
+## Phase 3 Data Flow
 
 ```
 Medic (MedicSign)
@@ -60,6 +60,10 @@ Patient (PatientDashboard)
   3. blake2b-256(ciphertext) → statementHash (Statement Store lookup key)
   4. Upload ciphertext to Statement Store via sr25519-signed RPC
   5. createListing(merkleRoot, statementHash, title, price) on-chain
+  6. Persist signed-pkg to localStorage as `signed-pkg:{ethRpcUrl}:{listingId}`
+     (needed at fulfill time to regenerate the ZK proof)
+  7. On fulfill: pick a field via dropdown → generateProofForField(pkg, key)
+     → fulfill(orderId, key, a, b, c, pubSignals) — see zk-circuits skill
 
 Researcher (ResearcherBuy)
   1. Browse listings (see title + truncated merkleRoot)
@@ -153,6 +157,24 @@ const result = await client.readContract({ functionName: "getListing", args: [i]
 //   merkleRoot statHash title  price  patient active
 ```
 
+### Phase 3 `fulfill` signature (with ZK proof)
+
+```ts
+// web/src/config/evm.ts — fulfill ABI now takes proof + public signals
+args: [
+  orderId,                    // uint256
+  decryptionKey,              // bytes32 — AES-256 key from localStorage
+  zkProof.a,                  // uint256[2]
+  zkProof.b,                  // uint256[2][2]
+  zkProof.c,                  // uint256[2]
+  zkProof.pubSignals,         // uint256[3] — [merkleRoot, pubKeyX, pubKeyY]
+]
+```
+
+The proof is generated in the browser via `web/src/utils/zk.ts` →
+`generateProofForField(pkg, fieldKey)`. See the **zk-circuits** skill for
+circuit design, snarkjs invocation, and the LeanIMT-to-circuit input mapping.
+
 ### Dev accounts
 
 `evmDevAccounts` in `web/src/config/evm.ts` exposes three fields per entry:
@@ -203,7 +225,9 @@ multi-step pages rather than creating a shared component (used in only one page)
 | `web/src/pages/PatientDashboard.tsx` | Signed package import, AES encrypt, Statement Store upload, listing |
 | `web/src/pages/ResearcherBuy.tsx` | Browse listings, place/cancel orders, decrypt data |
 | `web/src/config/evm.ts` | Contract ABI + dev accounts (including raw private keys) |
-| `web/src/config/deployments.ts` | Deployed contract addresses |
+| `web/src/config/deployments.ts` | Deployed contract addresses (incl. `verifier`) |
+| `web/src/utils/zk.ts` | `generateProofForField(pkg, fieldKey)` — snarkjs Groth16 proving in-browser; rebuilds LeanIMT, pads sparse siblings, returns Solidity-shaped proof. See **zk-circuits** skill. |
+| `web/public/circuits/` | `medical_disclosure.wasm` + `medical_disclosure_final.zkey` — fetched by zk.ts at proof time |
 | `web/src/hooks/useStatementStore.ts` | `submitToStatementStore`, `fetchStatements`, `checkStatementStoreAvailable` |
 | `web/src/components/FileDropZone.tsx` | Reusable drop zone — `onFileBytes` callback returns raw `Uint8Array` |
 | `web/src/index.css` | All custom utility classes |

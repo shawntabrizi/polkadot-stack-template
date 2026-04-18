@@ -49,3 +49,13 @@ contracts/*/ignition/deployments/
 .codex/
 .gemini/
 .envrc
+
+# Symlinked product skills (machine-local references to ../product-skills)
+skills/bulletin-sdk
+skills/bulletin-storage
+skills/host-api-test-sdk
+skills/polkadot-design-system
+skills/polkadot-product-engineering
+skills/polkadot-triangle
+skills/product-readme
+skills/statement-store-and-allowance
