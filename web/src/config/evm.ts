@@ -71,6 +71,10 @@ export const medicalMarketAbi = [
 		inputs: [
 			{ name: "orderId", type: "uint256" },
 			{ name: "decryptionKey", type: "bytes32" },
+			{ name: "a", type: "uint256[2]" },
+			{ name: "b", type: "uint256[2][2]" },
+			{ name: "c", type: "uint256[2]" },
+			{ name: "pubSignals", type: "uint256[3]" },
 		],
 		outputs: [],
 		stateMutability: "nonpayable",

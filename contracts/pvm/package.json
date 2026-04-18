@@ -27,6 +27,7 @@
     "hardhat": "^2.27.0",
     "prettier": "^3.8.1",
     "prettier-plugin-solidity": "^2.3.1",
+    "snarkjs": "^0.7.6",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2",
     "viem": "^2.0.0"

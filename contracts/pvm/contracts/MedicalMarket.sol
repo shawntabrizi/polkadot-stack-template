@@ -1,16 +1,28 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+interface IVerifier {
+	function verifyProof(
+		uint256[2] calldata a,
+		uint256[2][2] calldata b,
+		uint256[2] calldata c,
+		uint256[3] calldata pubSignals
+	) external view returns (bool);
+}
+
 /// @title MedicalMarket
-/// @notice Phase 1 marketplace: patients import a medic-signed record (Poseidon Merkle tree +
-///         EdDSA BabyJubJub signature), encrypt the full signed package, upload the ciphertext
-///         to the Statement Store, and list the Merkle root on-chain with a price.
-///         After a researcher locks payment, the patient calls fulfill() to post the AES-256-GCM
-///         decryption key on-chain — releasing funds and letting the researcher decrypt.
-///         No ZK proof yet — manual key release. The Merkle root commitment enables selective
-///         field disclosure proofs in Phase 3+.
+/// @notice Phase 3 marketplace: patients prove via Groth16 ZK proof that their data matches
+///         a researcher's criteria, then release the AES-256-GCM decryption key atomically.
+///         fulfill() now requires a valid Groth16 proof whose pubSignals[0] matches the listing's
+///         Merkle root. The Verifier contract (pure Solidity BN254, no assembly) is set at deploy.
 ///         Compiles to both EVM (solc) and PVM (resolc) bytecode.
 contract MedicalMarket {
+	address public verifier;
+
+	constructor(address _verifier) {
+		verifier = _verifier;
+	}
+
 	struct Listing {
 		bytes32 merkleRoot; // Poseidon Merkle root of the signed JSON record fields
 		bytes32 statementHash; // blake2b-256 of the AES-GCM ciphertext (Statement Store lookup key)
@@ -118,10 +130,22 @@ contract MedicalMarket {
 	}
 
 	/// @notice Post the AES-256-GCM decryption key, releasing payment to the patient.
+	///         Requires a valid Groth16 proof with pubSignals[0] == listing.merkleRoot.
 	///         The key is stored on-chain so the researcher can retrieve it at any time.
 	/// @param orderId The ID of the order to fulfill.
 	/// @param decryptionKey The 32-byte AES-256-GCM key that decrypts the Statement Store ciphertext.
-	function fulfill(uint256 orderId, bytes32 decryptionKey) external {
+	/// @param a Groth16 proof element A (G1 point).
+	/// @param b Groth16 proof element B (G2 point).
+	/// @param c Groth16 proof element C (G1 point).
+	/// @param pubSignals Public inputs: [merkleRoot, ...] — pubSignals[0] must equal listing.merkleRoot.
+	function fulfill(
+		uint256 orderId,
+		bytes32 decryptionKey,
+		uint256[2] calldata a,
+		uint256[2][2] calldata b,
+		uint256[2] calldata c,
+		uint256[3] calldata pubSignals
+	) external {
 		require(orderId < orderCount, "Order does not exist");
 		Order storage order = orders[orderId];
 		require(!order.confirmed, "Order already fulfilled");
@@ -129,6 +153,9 @@ contract MedicalMarket {
 
 		Listing storage listing = listings[order.listingId];
 		require(msg.sender == listing.patient, "Only the patient can fulfill the order");
+
+		require(bytes32(pubSignals[0]) == listing.merkleRoot, "merkleRoot mismatch");
+		require(IVerifier(verifier).verifyProof(a, b, c, pubSignals), "ZK proof invalid");
 
 		order.confirmed = true;
 		order.decryptionKey = decryptionKey;

@@ -13,6 +13,7 @@ import { useChainStore } from "../store/chainStore";
 import { formatDispatchError } from "../utils/format";
 import FileDropZone from "../components/FileDropZone";
 import { NovaWalletConnect } from "../components/NovaWalletConnect";
+import { type MerklePackage } from "../utils/zk";
 
 // Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
 const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
@@ -92,6 +93,7 @@ export default function PatientDashboard() {
 	const [listings, setListings] = useState<Listing[]>([]);
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
+	const [selectedField, setSelectedField] = useState<string>("");
 
 	// Load accounts: Nova Wallet → browser extension → dev fallback
 	useEffect(() => {
@@ -342,6 +344,10 @@ export default function PatientDashboard() {
 					functionName: "getListingCount",
 				})) as bigint) - 1n;
 			localStorage.setItem(`aes-key:${ethRpcUrl}:${listingId}`, keyHex);
+			localStorage.setItem(
+				`signed-pkg:${ethRpcUrl}:${listingId}`,
+				JSON.stringify(importedPackage),
+			);
 
 			setTxStatus(
 				"Listing created! Keep this tab open — you'll need to submit the key when a researcher pays.",
@@ -364,18 +370,52 @@ export default function PatientDashboard() {
 			const keyHex = localStorage.getItem(`aes-key:${ethRpcUrl}:${listingId}`);
 			if (!keyHex) {
 				setTxStatus(
-					`Error: No decryption key found for listing #${listingId}. Was this listing created in a different browser or session?`,
+					`Error: No decryption key for listing #${listingId}. Was it created in another session?`,
 				);
 				return;
 			}
+			const pkgJson = localStorage.getItem(`signed-pkg:${ethRpcUrl}:${listingId}`);
+			if (!pkgJson) {
+				setTxStatus(
+					`Error: Signed package not found for listing #${listingId}. Re-create the listing.`,
+				);
+				return;
+			}
+			const pkg = JSON.parse(pkgJson) as MerklePackage;
+			const fieldKeys = Object.keys(pkg.fields);
+			if (!selectedField || !fieldKeys.includes(selectedField)) {
+				setTxStatus("Error: Select a field to prove first.");
+				return;
+			}
 
-			setTxStatus("Submitting decryption key on-chain...");
-			const { txHash } = await reviveCall("fulfill", [orderId, keyHex as `0x${string}`]);
+			setTxStatus("Generating ZK proof… (10–30s, browser may pause briefly)");
+			const { generateProofForField } = await import("../utils/zk");
+			const zkProof = await generateProofForField(pkg, selectedField);
+
+			setTxStatus("Submitting proof and decryption key on-chain...");
+			const { txHash } = await reviveCall("fulfill", [
+				orderId,
+				keyHex as `0x${string}`,
+				zkProof.a,
+				zkProof.b,
+				zkProof.c,
+				zkProof.pubSignals,
+			]);
 			setTxStatus(`Transaction finalized: ${txHash}`);
 			loadListings();
 		} catch (e) {
 			console.error("fulfill failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
+	function getSignedPkgFields(listingId: bigint): string[] {
+		try {
+			const json = localStorage.getItem(`signed-pkg:${ethRpcUrl}:${listingId}`);
+			if (!json) return [];
+			return Object.keys((JSON.parse(json) as MerklePackage).fields);
+		} catch {
+			return [];
 		}
 	}
 
@@ -624,20 +664,38 @@ export default function PatientDashboard() {
 									</p>
 
 									{listing.active && hasPendingOrder && (
-										<button
-											onClick={() =>
-												fulfillOrder(orderIdForFulfill, listing.id)
-											}
-											className="btn-accent text-xs px-3 py-1"
-											style={{
-												background:
-													"linear-gradient(135deg, #e6007a 0%, #bc0062 100%)",
-												boxShadow:
-													"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
-											}}
-										>
-											Submit Key (Order #{orderIdForFulfill.toString()})
-										</button>
+										<div>
+											{getSignedPkgFields(listing.id).length > 0 && (
+												<select
+													value={selectedField}
+													onChange={(e) =>
+														setSelectedField(e.target.value)
+													}
+													className="w-full bg-[#1a1a2e] border border-gray-600 rounded px-2 py-1 text-sm text-white mb-2"
+												>
+													<option value="">Select field to prove…</option>
+													{getSignedPkgFields(listing.id).map((k) => (
+														<option key={k} value={k}>
+															{k}
+														</option>
+													))}
+												</select>
+											)}
+											<button
+												onClick={() =>
+													fulfillOrder(orderIdForFulfill, listing.id)
+												}
+												className="btn-accent text-xs px-3 py-1"
+												style={{
+													background:
+														"linear-gradient(135deg, #e6007a 0%, #bc0062 100%)",
+													boxShadow:
+														"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
+												}}
+											>
+												Submit Key (Order #{orderIdForFulfill.toString()})
+											</button>
+										</div>
 									)}
 
 									{listing.active && !hasPendingOrder && (

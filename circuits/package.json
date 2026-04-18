@@ -1,0 +1,20 @@
+{
+  "name": "medical-disclosure-circuits",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bash build.sh",
+    "test": "node test/test_circuit.mjs"
+  },
+  "devDependencies": {
+    "@zk-kit/circuits": "^0.4.0",
+    "@zk-kit/eddsa-poseidon": "^1.1.0",
+    "@zk-kit/lean-imt": "^2.2.4",
+    "blakejs": "^1.2.1",
+    "circomlib": "^2.0.5",
+    "poseidon-lite": "^0.3.0",
+    "snarkjs": "^0.7.6",
+    "viem": "^2.48.1"
+  }
+}

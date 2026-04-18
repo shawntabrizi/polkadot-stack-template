@@ -4,7 +4,15 @@ import "@parity/hardhat-polkadot";
 import { vars } from "hardhat/config";
 
 const config: HardhatUserConfig = {
-	solidity: "0.8.28",
+	solidity: {
+		version: "0.8.28",
+		settings: {
+			// Required for the Verifier contract: pure-Solidity BN254 verifier hits
+			// the 16-variable stack limit without IR-based codegen.
+			viaIR: true,
+			optimizer: { enabled: true, runs: 200 },
+		},
+	},
 	resolc: {
 		version: "1.0.0",
 	},
