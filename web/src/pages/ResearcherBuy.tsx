@@ -1,9 +1,23 @@
 import { useState, useEffect, useCallback } from "react";
-import { type Address, formatEther } from "viem";
-import { medicalMarketAbi, evmDevAccounts, getPublicClient, getWalletClient } from "../config/evm";
+import { type Address, formatEther, encodeFunctionData } from "viem";
+import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
+import { filter, firstValueFrom } from "rxjs";
+import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import { deployments } from "../config/deployments";
 import { fetchStatements } from "../hooks/useStatementStore";
+import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
+import { NovaWalletConnect } from "../components/NovaWalletConnect";
+import { getClient } from "../hooks/useChain";
+import { getStackTemplateDescriptor } from "../hooks/useConnection";
 import { useChainStore } from "../store/chainStore";
+import { formatDispatchError } from "../utils/format";
+
+// Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
+const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
+// Generous weight limit for contract calls.
+const CALL_WEIGHT = { ref_time: 3_000_000_000n, proof_size: 1_048_576n };
+// pallet-revive: 1 planck = 10^6 EVM wei (for 12-decimal chains).
+const WEI_TO_PLANCK = 1_000_000n;
 
 interface Listing {
 	id: bigint;
@@ -30,6 +44,15 @@ interface RetrievedData {
 	json: string;
 }
 
+function hexToBytes(hex: string): Uint8Array {
+	const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+	const out = new Uint8Array(clean.length / 2);
+	for (let i = 0; i < out.length; i++) {
+		out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+	}
+	return out;
+}
+
 export default function ResearcherBuy() {
 	const ethRpcUrl = useChainStore((s) => s.ethRpcUrl);
 	const wsUrl = useChainStore((s) => s.wsUrl);
@@ -37,13 +60,21 @@ export default function ResearcherBuy() {
 	const storageKey = `medical-market-address:${ethRpcUrl}`;
 	const defaultAddress = (deployments as Record<string, string | null>).medicalMarket ?? null;
 
+	const [accounts, setAccounts] = useState<AppAccount[]>(devAccounts);
+	const [selectedAccountIndex, setSelectedAccountIndex] = useState(0);
 	const [contractAddress, setContractAddress] = useState("");
-	const [selectedAccount, setSelectedAccount] = useState(0);
 	const [listings, setListings] = useState<Listing[]>([]);
 	const [orders, setOrders] = useState<Order[]>([]);
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [retrievedData, setRetrievedData] = useState<Record<string, RetrievedData>>({});
+
+	// Load accounts: Nova Wallet → browser extension → dev fallback
+	useEffect(() => {
+		getAccountsWithFallback()
+			.then(setAccounts)
+			.catch(() => setAccounts(devAccounts));
+	}, []);
 
 	useEffect(() => {
 		const stored = localStorage.getItem(storageKey);
@@ -69,7 +100,57 @@ export default function ResearcherBuy() {
 		}
 	}
 
-	const currentAddress = evmDevAccounts[selectedAccount].account.address;
+	const currentAccount = accounts[selectedAccountIndex] ?? accounts[0];
+
+	/** Submit a write call to MedicalMarket via pallet-revive extrinsic (sr25519 signing). */
+	async function reviveCall(
+		functionName: string,
+		args: readonly unknown[],
+		valueWei: bigint = 0n,
+	): Promise<{ txHash: string }> {
+		const calldata = encodeFunctionData({
+			abi: medicalMarketAbi,
+			functionName,
+			args,
+		} as Parameters<typeof encodeFunctionData>[0]);
+
+		const client = getClient(wsUrl);
+		const descriptor = await getStackTemplateDescriptor();
+		const api = client.getTypedApi(descriptor);
+
+		// pallet-revive requires an AccountId32 ↔ H160 mapping before a contract call.
+		// Dev accounts are pre-mapped via deployment; Nova Wallet accounts are not.
+		const h160 = new FixedSizeBinary(
+			hexToBytes(currentAccount.evmAddress),
+		) as FixedSizeBinary<20>;
+		const existingMapping = await api.query.Revive.OriginalAccount.getValue(h160);
+		if (!existingMapping) {
+			setTxStatus("Registering account with pallet-revive (one-time)...");
+			await firstValueFrom(
+				api.tx.Revive.map_account()
+					.signSubmitAndWatch(currentAccount.signer)
+					.pipe(
+						filter(
+							(e): e is TxBestBlocksState & { found: true } =>
+								e.type === "txBestBlocksState" && "found" in e && e.found === true,
+						),
+					),
+			);
+		}
+
+		const result = await api.tx.Revive.call({
+			dest: new FixedSizeBinary(hexToBytes(contractAddress)) as FixedSizeBinary<20>,
+			value: valueWei / WEI_TO_PLANCK, // EVM wei → chain planck
+			weight_limit: CALL_WEIGHT,
+			storage_deposit_limit: MAX_STORAGE_DEPOSIT,
+			data: Binary.fromHex(calldata),
+		}).signAndSubmit(currentAccount.signer);
+
+		if (!result.ok) {
+			throw new Error(formatDispatchError(result.dispatchError));
+		}
+		return { txHash: result.txHash };
+	}
 
 	const loadAll = useCallback(async () => {
 		if (!contractAddress) {
@@ -92,7 +173,6 @@ export default function ResearcherBuy() {
 				return;
 			}
 
-			// Load listings
 			const listingCount = (await client.readContract({
 				address: addr,
 				abi: medicalMarketAbi,
@@ -128,7 +208,6 @@ export default function ResearcherBuy() {
 			}
 			setListings(fetchedListings);
 
-			// Load orders filtered by current researcher address
 			const orderCount = (await client.readContract({
 				address: addr,
 				abi: medicalMarketAbi,
@@ -144,7 +223,7 @@ export default function ResearcherBuy() {
 					args: [i],
 				})) as [bigint, string, bigint, boolean, boolean];
 				const [listingId, researcher, amount, confirmed, cancelled] = result;
-				if (researcher.toLowerCase() !== currentAddress.toLowerCase()) continue;
+				if (researcher.toLowerCase() !== currentAccount.evmAddress.toLowerCase()) continue;
 				fetchedOrders.push({
 					id: i,
 					listingId,
@@ -161,24 +240,18 @@ export default function ResearcherBuy() {
 		} finally {
 			setLoading(false);
 		}
-	}, [contractAddress, ethRpcUrl, currentAddress]);
+	}, [contractAddress, ethRpcUrl, currentAccount.evmAddress]);
 
 	async function placeBuyOrder(listing: Listing) {
 		if (!contractAddress) return;
 		try {
 			setTxStatus(`Placing buy order for listing #${listing.id}...`);
-			const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
-			const hash = await walletClient.writeContract({
-				address: contractAddress as Address,
-				abi: medicalMarketAbi,
-				functionName: "placeBuyOrder",
-				args: [listing.id],
-				value: listing.price,
-			});
-			setTxStatus(`Transaction submitted: ${hash}`);
-			const publicClient = getPublicClient(ethRpcUrl);
-			await publicClient.waitForTransactionReceipt({ hash });
-			setTxStatus("Buy order placed successfully!");
+			const { txHash } = await reviveCall(
+				"placeBuyOrder",
+				[listing.id],
+				listing.price, // price is in EVM wei; reviveCall converts to planck
+			);
+			setTxStatus(`Buy order placed. Tx: ${txHash}`);
 			loadAll();
 		} catch (e) {
 			console.error("placeBuyOrder failed:", e);
@@ -190,18 +263,9 @@ export default function ResearcherBuy() {
 		if (!contractAddress) return;
 		try {
 			setTxStatus(`Cancelling order #${order.id} and requesting refund...`);
-			const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
-			const hash = await walletClient.writeContract({
-				address: contractAddress as Address,
-				abi: medicalMarketAbi,
-				functionName: "cancelOrder",
-				args: [order.id],
-			});
-			setTxStatus(`Transaction submitted: ${hash}`);
-			const publicClient = getPublicClient(ethRpcUrl);
-			await publicClient.waitForTransactionReceipt({ hash });
+			const { txHash } = await reviveCall("cancelOrder", [order.id]);
 			setTxStatus(
-				`Order #${order.id} cancelled — ${formatEther(order.amount)} PAS refunded.`,
+				`Order #${order.id} cancelled — ${formatEther(order.amount)} PAS refunded. Tx: ${txHash}`,
 			);
 			loadAll();
 		} catch (e) {
@@ -225,7 +289,6 @@ export default function ResearcherBuy() {
 			})) as [string, string, string, bigint, string, boolean];
 			const statementHash = listingResult[1] as string;
 
-			// Fetch the AES-256-GCM decryption key posted by the patient
 			setTxStatus("Reading decryption key from contract...");
 			const keyHex = (await client.readContract({
 				address: addr,
@@ -256,7 +319,6 @@ export default function ResearcherBuy() {
 				return;
 			}
 
-			// Decrypt: data = [12-byte IV] + [AES-GCM ciphertext]
 			setTxStatus("Decrypting...");
 			const keyBytes = hexToBytes(keyHex);
 			const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, [
@@ -279,15 +341,6 @@ export default function ResearcherBuy() {
 			console.error("retrieveData failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		}
-	}
-
-	function hexToBytes(hex: string): Uint8Array {
-		const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
-		const out = new Uint8Array(clean.length / 2);
-		for (let i = 0; i < out.length; i++) {
-			out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-		}
-		return out;
 	}
 
 	function truncate(addr: string) {
@@ -340,18 +393,32 @@ export default function ResearcherBuy() {
 				</div>
 
 				<div>
-					<label className="label">Dev Account (Researcher)</label>
+					<label className="label">Account (Researcher)</label>
 					<select
-						value={selectedAccount}
-						onChange={(e) => setSelectedAccount(parseInt(e.target.value))}
+						value={selectedAccountIndex}
+						onChange={(e) => setSelectedAccountIndex(parseInt(e.target.value))}
 						className="input-field w-full"
 					>
-						{evmDevAccounts.map((acc, i) => (
-							<option key={i} value={i}>
-								{acc.name} ({acc.account.address})
+						{accounts.map((acc, i) => (
+							<option key={acc.address} value={i}>
+								{acc.name} ({acc.evmAddress})
 							</option>
 						))}
 					</select>
+					<div className="mt-2">
+						<NovaWalletConnect
+							onConnected={(account) => {
+								setAccounts([account]);
+								setSelectedAccountIndex(0);
+							}}
+							onDisconnected={() => {
+								getAccountsWithFallback()
+									.then(setAccounts)
+									.catch(() => setAccounts(devAccounts));
+								setSelectedAccountIndex(0);
+							}}
+						/>
+					</div>
 				</div>
 
 				{txStatus && (

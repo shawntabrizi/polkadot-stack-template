@@ -8,7 +8,7 @@ let stackTemplateDescriptorPromise: Promise<
 
 let connectId = 0;
 
-async function getStackTemplateDescriptor() {
+export async function getStackTemplateDescriptor() {
 	if (!stackTemplateDescriptorPromise) {
 		stackTemplateDescriptorPromise = import("@polkadot-api/descriptors").then(
 			({ stack_template }) => stack_template,

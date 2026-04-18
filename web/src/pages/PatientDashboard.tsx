@@ -1,12 +1,25 @@
 import { useState, useCallback, useEffect } from "react";
-import { type Address, parseEther, formatEther } from "viem";
+import { type Address, parseEther, formatEther, encodeFunctionData } from "viem";
+import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
+import { filter, firstValueFrom } from "rxjs";
 import { blake2b } from "blakejs";
-import { medicalMarketAbi, evmDevAccounts, getPublicClient, getWalletClient } from "../config/evm";
+import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import { deployments } from "../config/deployments";
 import { submitToStatementStore, checkStatementStoreAvailable } from "../hooks/useStatementStore";
-import { getDevKeypair } from "../hooks/useAccount";
+import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
+import { getClient } from "../hooks/useChain";
+import { getStackTemplateDescriptor } from "../hooks/useConnection";
 import { useChainStore } from "../store/chainStore";
+import { formatDispatchError } from "../utils/format";
 import FileDropZone from "../components/FileDropZone";
+import { NovaWalletConnect } from "../components/NovaWalletConnect";
+
+// Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
+const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
+// Generous weight limit for contract calls.
+const CALL_WEIGHT = { ref_time: 3_000_000_000n, proof_size: 1_048_576n };
+// pallet-revive: 1 planck = 10^6 EVM wei (for 12-decimal chains).
+const WEI_TO_PLANCK = 1_000_000n;
 
 interface SignedPackage {
 	fields: Record<string, unknown>;
@@ -24,7 +37,7 @@ interface Listing {
 	price: bigint;
 	patient: string;
 	active: boolean;
-	pendingOrderId: bigint; // 0 = none, else 1-based
+	pendingOrderId: bigint;
 }
 
 function bytesToHex(bytes: Uint8Array): `0x${string}` {
@@ -34,10 +47,15 @@ function bytesToHex(bytes: Uint8Array): `0x${string}` {
 			.join("")) as `0x${string}`;
 }
 
-/**
- * Encrypt plaintext bytes with AES-256-GCM.
- * Returns [12-byte IV || ciphertext] and the raw key as a 0x-prefixed hex string.
- */
+function hexToBytes(hex: string): Uint8Array {
+	const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+	const out = new Uint8Array(clean.length / 2);
+	for (let i = 0; i < out.length; i++) {
+		out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+	}
+	return out;
+}
+
 async function encryptData(
 	plaintext: Uint8Array,
 ): Promise<{ encrypted: Uint8Array; keyHex: `0x${string}` }> {
@@ -48,12 +66,9 @@ async function encryptData(
 	const iv = crypto.getRandomValues(new Uint8Array(12));
 	const ciphertextBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
 	const ciphertext = new Uint8Array(ciphertextBuf);
-
-	// Prepend IV so the researcher can extract it when decrypting
 	const encrypted = new Uint8Array(iv.length + ciphertext.length);
 	encrypted.set(iv, 0);
 	encrypted.set(ciphertext, iv.length);
-
 	const rawKey = new Uint8Array(await crypto.subtle.exportKey("raw", key));
 	return { encrypted, keyHex: bytesToHex(rawKey) };
 }
@@ -63,11 +78,11 @@ export default function PatientDashboard() {
 	const wsUrl = useChainStore((s) => s.wsUrl);
 
 	const storageKey = `medical-market-address:${ethRpcUrl}`;
-
 	const defaultAddress = (deployments as Record<string, string | null>).medicalMarket ?? null;
 
+	const [accounts, setAccounts] = useState<AppAccount[]>(devAccounts);
+	const [selectedAccountIndex, setSelectedAccountIndex] = useState(0);
 	const [contractAddress, setContractAddress] = useState("");
-	const [selectedAccount, setSelectedAccount] = useState(0);
 	const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
 	const [importedPackage, setImportedPackage] = useState<SignedPackage | null>(null);
 	const [packageParseError, setPackageParseError] = useState<string | null>(null);
@@ -78,18 +93,22 @@ export default function PatientDashboard() {
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 
-	// Load contract address from localStorage / deployments on mount or URL change
+	// Load accounts: Nova Wallet → browser extension → dev fallback
+	useEffect(() => {
+		getAccountsWithFallback()
+			.then(setAccounts)
+			.catch(() => setAccounts(devAccounts));
+	}, []);
+
 	useEffect(() => {
 		const stored = localStorage.getItem(storageKey);
 		setContractAddress(stored ?? defaultAddress ?? "");
 	}, [storageKey, defaultAddress]);
 
-	// Check Statement Store availability
 	useEffect(() => {
 		checkStatementStoreAvailable(wsUrl).then(setStatementStoreAvailable);
 	}, [wsUrl]);
 
-	// Load listings whenever the contract address or chain changes
 	useEffect(() => {
 		if (contractAddress) {
 			loadListings();
@@ -132,7 +151,7 @@ export default function PatientDashboard() {
 		}
 	}, []);
 
-	const currentAddress = evmDevAccounts[selectedAccount].account.address;
+	const currentAccount = accounts[selectedAccountIndex] ?? accounts[0];
 
 	async function verifyContract(): Promise<boolean> {
 		const client = getPublicClient(ethRpcUrl);
@@ -144,6 +163,67 @@ export default function PatientDashboard() {
 			return false;
 		}
 		return true;
+	}
+
+	/** Submit a write call to MedicalMarket via pallet-revive extrinsic (sr25519 signing). */
+	async function reviveCall(
+		functionName: string,
+		args: readonly unknown[],
+		valueWei: bigint = 0n,
+	): Promise<{ txHash: string }> {
+		const calldata = encodeFunctionData({
+			abi: medicalMarketAbi,
+			functionName,
+			args,
+		} as Parameters<typeof encodeFunctionData>[0]);
+
+		const client = getClient(wsUrl);
+		const descriptor = await getStackTemplateDescriptor();
+		const api = client.getTypedApi(descriptor);
+
+		// pallet-revive requires an AccountId32 ↔ H160 mapping before a contract call.
+		// Dev accounts are pre-mapped via deployment; Nova Wallet accounts are not.
+		const h160 = new FixedSizeBinary(
+			hexToBytes(currentAccount.evmAddress),
+		) as FixedSizeBinary<20>;
+		const existingMapping = await api.query.Revive.OriginalAccount.getValue(h160);
+		if (!existingMapping) {
+			setTxStatus("Registering account with pallet-revive (one-time)...");
+			await firstValueFrom(
+				api.tx.Revive.map_account()
+					.signSubmitAndWatch(currentAccount.signer)
+					.pipe(
+						filter(
+							(e): e is TxBestBlocksState & { found: true } =>
+								e.type === "txBestBlocksState" && "found" in e && e.found === true,
+						),
+					),
+			);
+		}
+
+		// Resolve on best-chain inclusion rather than finalization — signAndSubmit waits
+		// for GRANDPA which can hang indefinitely if the WS subscription drops.
+		const result = await firstValueFrom(
+			api.tx.Revive.call({
+				dest: new FixedSizeBinary(hexToBytes(contractAddress)) as FixedSizeBinary<20>,
+				value: valueWei / WEI_TO_PLANCK,
+				weight_limit: CALL_WEIGHT,
+				storage_deposit_limit: MAX_STORAGE_DEPOSIT,
+				data: Binary.fromHex(calldata),
+			})
+				.signSubmitAndWatch(currentAccount.signer)
+				.pipe(
+					filter(
+						(e): e is TxBestBlocksState & { found: true } =>
+							e.type === "txBestBlocksState" && "found" in e && e.found === true,
+					),
+				),
+		);
+
+		if (!result.ok) {
+			throw new Error(formatDispatchError(result.dispatchError));
+		}
+		return { txHash: result.txHash };
 	}
 
 	async function loadListings() {
@@ -183,8 +263,7 @@ export default function PatientDashboard() {
 
 				const [merkleRoot, , title, price, patient, active] = rawTuple;
 
-				// Only include listings belonging to the current account
-				if (patient.toLowerCase() !== currentAddress.toLowerCase()) continue;
+				if (patient.toLowerCase() !== currentAccount.evmAddress.toLowerCase()) continue;
 
 				const pendingOrderId = await client.readContract({
 					address: addr,
@@ -193,15 +272,7 @@ export default function PatientDashboard() {
 					args: [i],
 				});
 
-				result.push({
-					id: i,
-					merkleRoot,
-					title,
-					price,
-					patient,
-					active,
-					pendingOrderId,
-				});
+				result.push({ id: i, merkleRoot, title, price, patient, active, pendingOrderId });
 			}
 			setListings(result);
 		} catch (e) {
@@ -237,37 +308,33 @@ export default function PatientDashboard() {
 		try {
 			if (!(await verifyContract())) return;
 
-			// Step 1: Encrypt the signed package bytes with AES-256-GCM
 			setTxStatus("Encrypting signed record...");
 			const { encrypted, keyHex } = await encryptData(fileBytes);
 
-			// Step 2: Compute blake2b-256 of the ciphertext — Statement Store lookup key
 			const ciphertextHash = bytesToHex(blake2b(encrypted, undefined, 32));
 
-			// Step 3: Upload encrypted bytes to Statement Store
 			setTxStatus("Submitting encrypted data to Statement Store...");
-			const keypair = getDevKeypair(selectedAccount);
-			await submitToStatementStore(wsUrl, encrypted, keypair.publicKey, keypair.sign);
+			// Use localSigner when present — Nova Wallet's signRaw adds a <Bytes>
+			// prefix that the substrate statement store rejects.
+			const stmtSigner = currentAccount.localSigner ?? currentAccount.signer;
+			await submitToStatementStore(
+				wsUrl,
+				encrypted,
+				stmtSigner.publicKey,
+				stmtSigner.signBytes,
+			);
 
-			// Step 4: Create listing on-chain with Merkle root + statement hash
 			setTxStatus("Creating listing on-chain...");
-			const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
-			const txHash = await walletClient.writeContract({
-				address: contractAddress as Address,
-				abi: medicalMarketAbi,
-				functionName: "createListing",
-				args: [
-					importedPackage.merkleRoot as `0x${string}`,
-					ciphertextHash,
-					titleStr.trim(),
-					parseEther(priceStr),
-				],
-			});
+			const priceWei = parseEther(priceStr);
+			const { txHash } = await reviveCall("createListing", [
+				importedPackage.merkleRoot as `0x${string}`,
+				ciphertextHash,
+				titleStr.trim(),
+				priceWei,
+			]);
 			setTxStatus(`Transaction submitted: ${txHash}`);
-			const publicClient = getPublicClient(ethRpcUrl);
-			await publicClient.waitForTransactionReceipt({ hash: txHash });
 
-			// Step 5: Store the AES key in localStorage (needed later to fulfill the order)
+			const publicClient = getPublicClient(ethRpcUrl);
 			const listingId =
 				((await publicClient.readContract({
 					address: contractAddress as Address,
@@ -294,7 +361,6 @@ export default function PatientDashboard() {
 		try {
 			if (!(await verifyContract())) return;
 
-			// Retrieve the AES key stored at listing creation time
 			const keyHex = localStorage.getItem(`aes-key:${ethRpcUrl}:${listingId}`);
 			if (!keyHex) {
 				setTxStatus(
@@ -304,17 +370,8 @@ export default function PatientDashboard() {
 			}
 
 			setTxStatus("Submitting decryption key on-chain...");
-			const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
-			const txHash = await walletClient.writeContract({
-				address: contractAddress as Address,
-				abi: medicalMarketAbi,
-				functionName: "fulfill",
-				args: [orderId, keyHex as `0x${string}`],
-			});
-			setTxStatus(`Transaction submitted: ${txHash}`);
-			const publicClient = getPublicClient(ethRpcUrl);
-			await publicClient.waitForTransactionReceipt({ hash: txHash });
-			setTxStatus("Key submitted! Researcher can now decrypt the data.");
+			const { txHash } = await reviveCall("fulfill", [orderId, keyHex as `0x${string}`]);
+			setTxStatus(`Transaction finalized: ${txHash}`);
 			loadListings();
 		} catch (e) {
 			console.error("fulfill failed:", e);
@@ -327,17 +384,8 @@ export default function PatientDashboard() {
 		try {
 			if (!(await verifyContract())) return;
 			setTxStatus("Submitting cancelListing transaction...");
-			const walletClient = await getWalletClient(selectedAccount, ethRpcUrl);
-			const txHash = await walletClient.writeContract({
-				address: contractAddress as Address,
-				abi: medicalMarketAbi,
-				functionName: "cancelListing",
-				args: [listingId],
-			});
-			setTxStatus(`Transaction submitted: ${txHash}`);
-			const publicClient = getPublicClient(ethRpcUrl);
-			await publicClient.waitForTransactionReceipt({ hash: txHash });
-			setTxStatus("Listing cancelled!");
+			const { txHash } = await reviveCall("cancelListing", [listingId]);
+			setTxStatus(`Listing cancelled. Tx: ${txHash}`);
 			loadListings();
 		} catch (e) {
 			console.error("cancelListing failed:", e);
@@ -381,18 +429,32 @@ export default function PatientDashboard() {
 				</div>
 
 				<div>
-					<label className="label">Dev Account (Patient)</label>
+					<label className="label">Account (Patient)</label>
 					<select
-						value={selectedAccount}
-						onChange={(e) => setSelectedAccount(parseInt(e.target.value))}
+						value={selectedAccountIndex}
+						onChange={(e) => setSelectedAccountIndex(parseInt(e.target.value))}
 						className="input-field w-full"
 					>
-						{evmDevAccounts.map((acc, i) => (
-							<option key={i} value={i}>
-								{acc.name} ({acc.account.address})
+						{accounts.map((acc, i) => (
+							<option key={acc.address} value={i}>
+								{acc.name} ({acc.evmAddress})
 							</option>
 						))}
 					</select>
+					<div className="mt-2">
+						<NovaWalletConnect
+							onConnected={(account) => {
+								setAccounts([account]);
+								setSelectedAccountIndex(0);
+							}}
+							onDisconnected={() => {
+								getAccountsWithFallback()
+									.then(setAccounts)
+									.catch(() => setAccounts(devAccounts));
+								setSelectedAccountIndex(0);
+							}}
+						/>
+					</div>
 				</div>
 			</div>
 
@@ -511,7 +573,6 @@ export default function PatientDashboard() {
 					<div className="space-y-2">
 						{listings.map((listing) => {
 							const hasPendingOrder = listing.pendingOrderId > 0n;
-							// orderId passed to fulfill is 0-based (pendingOrderId is 1-based)
 							const orderIdForFulfill = listing.pendingOrderId - 1n;
 							const hasKey = !!localStorage.getItem(
 								`aes-key:${ethRpcUrl}:${listing.id}`,

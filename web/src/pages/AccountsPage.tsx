@@ -12,6 +12,7 @@ import {
 } from "polkadot-api/pjs-signer";
 import { injectSpektrExtension, SpektrExtensionName } from "@novasamatech/product-sdk";
 import { getSs58AddressInfo, Keccak256 } from "@polkadot-api/substrate-bindings";
+import { useActiveSessions, getAppAccountFromSession } from "../hooks/usePairing";
 
 type HostEnvironment = "desktop-webview" | "web-iframe" | "standalone";
 
@@ -103,6 +104,22 @@ export default function AccountsPage() {
 	const [fundStatus, setFundStatus] = useState<string | null>(null);
 	const [fundAmount, setFundAmount] = useState("10000");
 	const [accountInfos, setAccountInfos] = useState<Record<string, AccountInfo>>({});
+
+	const activeSessions = useActiveSessions();
+	const pairedAccount = (() => {
+		if (!activeSessions.length) return null;
+		try {
+			const acc = getAppAccountFromSession(activeSessions[0]);
+			return {
+				name: acc.name,
+				ss58: acc.address,
+				eth: acc.evmAddress,
+				type: "extension" as const,
+			};
+		} catch {
+			return null;
+		}
+	})();
 
 	// Build dev account display list
 	const devDisplayAccounts: DisplayAccount[] = devAccounts.map((acc, i) => ({
@@ -318,6 +335,34 @@ export default function AccountsPage() {
 						className={`text-sm font-medium ${fundStatus.startsWith("Error") ? "text-accent-red" : "text-accent-green"}`}
 					>
 						{fundStatus}
+					</p>
+				)}
+			</div>
+
+			{/* QR Paired Wallet */}
+			<div className="card space-y-4">
+				<h2 className="section-title">QR Paired Wallet</h2>
+				{pairedAccount ? (
+					<div className="space-y-3">
+						<p className="text-sm text-accent-green font-medium">
+							Connected via QR pairing
+						</p>
+						<AccountCard
+							account={pairedAccount}
+							info={accountInfos[pairedAccount.ss58]}
+							badge={{
+								className:
+									"bg-accent-green/10 text-accent-green border border-accent-green/20",
+								label: "QR",
+							}}
+							onFund={() => fundAccount(pairedAccount.ss58, pairedAccount.name)}
+							connected={connected}
+						/>
+					</div>
+				) : (
+					<p className="text-sm text-text-muted">
+						No QR-paired wallet. Use the Patient or Researcher page to connect via QR
+						code.
 					</p>
 				)}
 			</div>
