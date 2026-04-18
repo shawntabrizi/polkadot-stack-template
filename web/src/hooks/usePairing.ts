@@ -11,12 +11,47 @@ import { createLocalStorageAdapter } from "@novasamatech/storage-adapter";
 import { ss58Address } from "@polkadot-labs/hdkd-helpers";
 import type { PolkadotSigner } from "polkadot-api";
 import type { SigningPayloadRequest } from "@novasamatech/host-papp";
-import { substrateToH160, type AppAccount } from "./useAccount";
+import { substrateToH160, type AppAccount, type LocalSigner } from "./useAccount";
+import { secretFromSeed, getPublicKey, sign as sr25519Sign } from "@scure/sr25519";
 
 // Singleton — one adapter per browser session.
 // Uses Paseo People chain as statement store (publicly reachable by phone).
 // Default was pop3-testnet.parity-lab.parity.io which is unreliable.
 let adapter: ReturnType<typeof createPappAdapter> | null = null;
+
+/**
+ * Bridge our polkadot-api v1 WS provider to the v2 interface expected by
+ * @novasamatech/statement-store's createLazyClient.
+ *
+ * v1 provider: send(jsonString), onMsg receives jsonString
+ * v2 provider: send(object),     onMsg receives parsed object
+ *
+ * Without this bridge, statement-store's raw-client calls send({...}) and v1's
+ * send() tries JSON.parse({}) → SyntaxError: "[object Object]" is not valid JSON.
+ */
+function makePaseoProvider() {
+	// heartbeatTimeout: Infinity matches host-papp's own default — without it
+	// the ws-provider kills the connection after 40s idle, mid-way through
+	// waiting for the phone's sign response to hit the statement store.
+	const v1 = getWsProvider({
+		endpoints: [...SS_PASEO_STABLE_STAGE_ENDPOINTS],
+		heartbeatTimeout: Number.POSITIVE_INFINITY,
+	});
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	return (onMsg: (msg: unknown) => void): any => {
+		const conn = v1((jsonStr: string) => {
+			try {
+				onMsg(JSON.parse(jsonStr));
+			} catch {
+				// ignore malformed frames
+			}
+		});
+		return {
+			send: (obj: unknown) => conn.send(JSON.stringify(obj)),
+			disconnect: conn.disconnect,
+		};
+	};
+}
 
 export function getPappAdapter() {
 	if (!adapter) {
@@ -27,10 +62,8 @@ export function getPappAdapter() {
 			metadata: `${window.location.origin}/nova-metadata.json`,
 			adapters: {
 				storage: createLocalStorageAdapter("pmp:"),
-				// Use Paseo People chain — more stable than the default Parity testnet.
-				// Cast needed: statement-store bundles polkadot-api v2 while our app uses v1.
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				lazyClient: createLazyClient(getWsProvider(SS_PASEO_STABLE_STAGE_ENDPOINTS) as any),
+				lazyClient: createLazyClient(makePaseoProvider() as any),
 			},
 		});
 	}
@@ -58,6 +91,21 @@ export function useActiveSessions(): UserSession[] {
 	return sessions;
 }
 
+/** Ephemeral sr25519 keypair for statement store signing — one per page load. */
+function makeLocalSigner(): LocalSigner {
+	// Nova Wallet's signRaw wraps raw bytes with <Bytes>...</Bytes> prefix, which
+	// the substrate statement store doesn't expect. We sign statements locally
+	// with a fresh random key that never leaves the browser.
+	const seed = new Uint8Array(32);
+	crypto.getRandomValues(seed);
+	const secretKey = secretFromSeed(seed);
+	const publicKey = getPublicKey(secretKey);
+	return {
+		publicKey,
+		signBytes: (data: Uint8Array) => Promise.resolve(sr25519Sign(secretKey, data)),
+	};
+}
+
 /** Build an AppAccount from a live UserSession after pairing completes. */
 export function getAppAccountFromSession(session: UserSession): AppAccount {
 	// remoteAccount.accountId is the 32-byte AccountId32 (sr25519 public key).
@@ -68,6 +116,7 @@ export function getAppAccountFromSession(session: UserSession): AppAccount {
 		address,
 		evmAddress: substrateToH160(accountId),
 		signer: createHostPappSigner(session, address, accountId),
+		localSigner: makeLocalSigner(),
 	};
 }
 
@@ -125,6 +174,8 @@ function createHostPappSigner(
 		publicKey,
 
 		signTx: async (callData, signedExtensions, _metadata, atBlockNumber) => {
+			console.log("[pairing] signTx callData length =", callData.length, "bytes");
+			console.log("[pairing] signTx callData hex =", toHex(callData));
 			const ext = signedExtensions;
 
 			// Extract values from PAPI's binary signed extensions.
@@ -166,7 +217,24 @@ function createHostPappSigner(
 				mode: undefined,
 			};
 
-			const result = await session.signPayload(payload);
+			// Surface the full payload so we can confirm genesisHash, specVersion etc.
+			// match what PWallet expects (PWallet has a hard-coded CHAIN_ENDPOINTS map
+			// keyed by genesisHash — unknown hashes throw silently after Approve).
+			console.log("[pairing] signPayload →", payload);
+			const pending = session.signPayload(payload);
+			const timeout = new Promise<never>((_, reject) =>
+				setTimeout(
+					() =>
+						reject(
+							new Error(
+								"signPayload timed out (60s). Check: (1) PWallet pointed at Paseo statement store, (2) genesisHash is registered in PWallet's CHAIN_ENDPOINTS map.",
+							),
+						),
+					60_000,
+				),
+			);
+			const result = await Promise.race([pending, timeout]);
+			console.log("[pairing] signPayload ←", result);
 			if (result.isErr()) throw new Error(`Nova Wallet signing failed: ${result.error}`);
 			const { signedTransaction } = result.value;
 			if (!signedTransaction) {

@@ -85,9 +85,11 @@ if curl -s -o /dev/null "$SUBSTRATE_RPC_HTTP" 2>/dev/null; then
 fi
 
 export_frontend_runtime_env
-npm run dev -- --host 0.0.0.0 --port "$STACK_FRONTEND_PORT" &
+FRONTEND_LOG="$ZOMBIE_DIR/frontend.log"
+npm run dev -- --host 0.0.0.0 --port "$STACK_FRONTEND_PORT" >"$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
 log_info "Frontend starting at $FRONTEND_URL"
+log_info "Frontend log: $FRONTEND_LOG"
 
 cd "$ROOT_DIR"
 
@@ -100,5 +102,6 @@ log_info "Zombienet dir: $ZOMBIE_DIR"
 echo ""
 log_info "Included examples: PoE pallet, EVM contract, PVM contract, Statement Store, Bulletin upload"
 echo ""
+log_info "Tail all service logs in another terminal: ./scripts/tail-logs.sh"
 log_info "Press Ctrl+C to stop all."
 wait "$ZOMBIE_PID"

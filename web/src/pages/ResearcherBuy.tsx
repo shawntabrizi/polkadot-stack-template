@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { type Address, formatEther, encodeFunctionData } from "viem";
-import { Binary, FixedSizeBinary } from "polkadot-api";
+import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
+import { filter, firstValueFrom } from "rxjs";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import { deployments } from "../config/deployments";
 import { fetchStatements } from "../hooks/useStatementStore";
@@ -116,6 +117,26 @@ export default function ResearcherBuy() {
 		const client = getClient(wsUrl);
 		const descriptor = await getStackTemplateDescriptor();
 		const api = client.getTypedApi(descriptor);
+
+		// pallet-revive requires an AccountId32 ↔ H160 mapping before a contract call.
+		// Dev accounts are pre-mapped via deployment; Nova Wallet accounts are not.
+		const h160 = new FixedSizeBinary(
+			hexToBytes(currentAccount.evmAddress),
+		) as FixedSizeBinary<20>;
+		const existingMapping = await api.query.Revive.OriginalAccount.getValue(h160);
+		if (!existingMapping) {
+			setTxStatus("Registering account with pallet-revive (one-time)...");
+			await firstValueFrom(
+				api.tx.Revive.map_account()
+					.signSubmitAndWatch(currentAccount.signer)
+					.pipe(
+						filter(
+							(e): e is TxBestBlocksState & { found: true } =>
+								e.type === "txBestBlocksState" && "found" in e && e.found === true,
+						),
+					),
+			);
+		}
 
 		const result = await api.tx.Revive.call({
 			dest: new FixedSizeBinary(hexToBytes(contractAddress)) as FixedSizeBinary<20>,

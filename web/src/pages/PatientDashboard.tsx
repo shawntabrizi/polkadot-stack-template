@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { type Address, parseEther, formatEther, encodeFunctionData } from "viem";
-import { Binary, FixedSizeBinary } from "polkadot-api";
+import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
+import { filter, firstValueFrom } from "rxjs";
 import { blake2b } from "blakejs";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import { deployments } from "../config/deployments";
@@ -180,13 +181,44 @@ export default function PatientDashboard() {
 		const descriptor = await getStackTemplateDescriptor();
 		const api = client.getTypedApi(descriptor);
 
-		const result = await api.tx.Revive.call({
-			dest: new FixedSizeBinary(hexToBytes(contractAddress)) as FixedSizeBinary<20>,
-			value: valueWei / WEI_TO_PLANCK, // EVM wei → chain planck
-			weight_limit: CALL_WEIGHT,
-			storage_deposit_limit: MAX_STORAGE_DEPOSIT,
-			data: Binary.fromHex(calldata),
-		}).signAndSubmit(currentAccount.signer);
+		// pallet-revive requires an AccountId32 ↔ H160 mapping before a contract call.
+		// Dev accounts are pre-mapped via deployment; Nova Wallet accounts are not.
+		const h160 = new FixedSizeBinary(
+			hexToBytes(currentAccount.evmAddress),
+		) as FixedSizeBinary<20>;
+		const existingMapping = await api.query.Revive.OriginalAccount.getValue(h160);
+		if (!existingMapping) {
+			setTxStatus("Registering account with pallet-revive (one-time)...");
+			await firstValueFrom(
+				api.tx.Revive.map_account()
+					.signSubmitAndWatch(currentAccount.signer)
+					.pipe(
+						filter(
+							(e): e is TxBestBlocksState & { found: true } =>
+								e.type === "txBestBlocksState" && "found" in e && e.found === true,
+						),
+					),
+			);
+		}
+
+		// Resolve on best-chain inclusion rather than finalization — signAndSubmit waits
+		// for GRANDPA which can hang indefinitely if the WS subscription drops.
+		const result = await firstValueFrom(
+			api.tx.Revive.call({
+				dest: new FixedSizeBinary(hexToBytes(contractAddress)) as FixedSizeBinary<20>,
+				value: valueWei / WEI_TO_PLANCK,
+				weight_limit: CALL_WEIGHT,
+				storage_deposit_limit: MAX_STORAGE_DEPOSIT,
+				data: Binary.fromHex(calldata),
+			})
+				.signSubmitAndWatch(currentAccount.signer)
+				.pipe(
+					filter(
+						(e): e is TxBestBlocksState & { found: true } =>
+							e.type === "txBestBlocksState" && "found" in e && e.found === true,
+					),
+				),
+		);
 
 		if (!result.ok) {
 			throw new Error(formatDispatchError(result.dispatchError));
@@ -282,11 +314,14 @@ export default function PatientDashboard() {
 			const ciphertextHash = bytesToHex(blake2b(encrypted, undefined, 32));
 
 			setTxStatus("Submitting encrypted data to Statement Store...");
+			// Use localSigner when present — Nova Wallet's signRaw adds a <Bytes>
+			// prefix that the substrate statement store rejects.
+			const stmtSigner = currentAccount.localSigner ?? currentAccount.signer;
 			await submitToStatementStore(
 				wsUrl,
 				encrypted,
-				currentAccount.signer.publicKey,
-				currentAccount.signer.signBytes,
+				stmtSigner.publicKey,
+				stmtSigner.signBytes,
 			);
 
 			setTxStatus("Creating listing on-chain...");
