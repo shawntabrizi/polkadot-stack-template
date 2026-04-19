@@ -31,6 +31,11 @@ chain_data/
 # PAPI generated (committed so frontend works out of the box)
 # Regenerate with: cd web && npx papi update && npx papi
 
+# Multisig CLI pending state (written by multisig-add-medic.ts / multisig-map-account.ts
+# between signer 0 and signer 1)
+.multisig-pending.json
+.multisig-pending-map.json
+
 # Hardhat
 contracts/*/cache/
 contracts/*/artifacts/

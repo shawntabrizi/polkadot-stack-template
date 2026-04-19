@@ -16,11 +16,17 @@
     "fmt": "prettier --write 'contracts/**/*.sol' 'scripts/**/*.ts' 'test/**/*.ts' hardhat.config.ts",
     "fmt:check": "prettier --check 'contracts/**/*.sol' 'scripts/**/*.ts' 'test/**/*.ts' hardhat.config.ts"
   },
+  "dependencies": {
+    "@polkadot-api/descriptors": "file:.papi/descriptors",
+    "@polkadot/util": "^13.0.0",
+    "@polkadot/util-crypto": "^13.0.0"
+  },
   "devDependencies": {
     "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
     "@nomicfoundation/hardhat-viem": "^2.0.0",
     "@parity/hardhat-polkadot": "0.2.7",
     "@parity/resolc": "1.0.0",
+    "@polkadot/keyring": "^14.0.3",
     "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.10",
     "chai": "^4.3.0",

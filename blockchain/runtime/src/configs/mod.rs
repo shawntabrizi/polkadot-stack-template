@@ -141,6 +141,22 @@ impl pallet_sudo::Config for Runtime {
 }
 
 parameter_types! {
+	pub const MultisigDepositBase: Balance = 2 * EXISTENTIAL_DEPOSIT;
+	pub const MultisigDepositFactor: Balance = EXISTENTIAL_DEPOSIT / 32;
+}
+
+impl pallet_multisig::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type RuntimeCall = RuntimeCall;
+	type Currency = Balances;
+	type DepositBase = MultisigDepositBase;
+	type DepositFactor = MultisigDepositFactor;
+	type MaxSignatories = ConstU32<100>;
+	type WeightInfo = ();
+	type BlockNumberProvider = System;
+}
+
+parameter_types! {
 	pub const ReservedXcmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
 	pub const ReservedDmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
 	pub const RelayOrigin: AggregateMessageOrigin = AggregateMessageOrigin::Parent;

@@ -3,6 +3,7 @@ import { type Address, formatEther, encodeFunctionData } from "viem";
 import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
 import { filter, firstValueFrom } from "rxjs";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
+import VerifiedBadge from "../components/VerifiedBadge";
 import { deployments } from "../config/deployments";
 import { subscribeStatements } from "../hooks/useStatementStore";
 import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
@@ -478,6 +479,9 @@ export default function ResearcherBuy() {
 										{formatEther(listing.price)} PAS
 									</span>
 								</p>
+								<div>
+									<VerifiedBadge address={listing.patient} />
+								</div>
 							</div>
 						))}
 					</div>

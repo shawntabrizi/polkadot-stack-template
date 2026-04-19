@@ -1,0 +1,12 @@
+{
+  "version": 0,
+  "descriptorPath": ".papi/descriptors",
+  "entries": {
+    "stack_template": {
+      "wsUrl": "ws://127.0.0.1:10044",
+      "metadata": ".papi/metadata/stack_template.scale",
+      "genesis": "0xa2763dd0593df8c1e066e65f0dca65e4140d8cf5b75847d08e5e663bde588c46",
+      "codeHash": "0xb50def5526c1f1fd1ef902c14903e8e67c6fa767f7845e841f61bf4fe1ecdeab"
+    }
+  }
+}

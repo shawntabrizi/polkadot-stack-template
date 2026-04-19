@@ -3,10 +3,10 @@
   "descriptorPath": ".papi/descriptors",
   "entries": {
     "stack_template": {
-      "wsUrl": "ws://127.0.0.1:9944",
+      "wsUrl": "ws://127.0.0.1:10044",
       "metadata": ".papi/metadata/stack_template.scale",
       "genesis": "0x4545454545454545454545454545454545454545454545454545454545454545",
-      "codeHash": "0x5d82548ee8362ca123514269ea6df6f1ad252e4f120516b810bcb2cb29957eb8"
+      "codeHash": "0xb50def5526c1f1fd1ef902c14903e8e67c6fa767f7845e841f61bf4fe1ecdeab"
     },
     "bulletin": {
       "wsUrl": "wss://paseo-bulletin-rpc.polkadot.io",

@@ -1,6 +1,6 @@
 import hre from "hardhat";
 import { polkadotHubTestnet } from "../hardhat.config";
-import { updateDeployments } from "./_deployments";
+import { readDeployments, updateDeployments } from "./_deployments";
 
 async function deployContract(
 	walletClient: Awaited<ReturnType<typeof hre.viem.getWalletClients>>[number],
@@ -23,23 +23,25 @@ async function deployContract(
 }
 
 async function main() {
+	const deployments = readDeployments();
+	if (!deployments.multisig) {
+		throw new Error("Run compute-multisig.ts first to populate deployments.json.multisig");
+	}
+	const { h160: multisigH160 } = deployments.multisig;
+
 	const isTestnet = hre.network.name === "polkadotTestnet";
 	const chainOption = isTestnet ? { chain: polkadotHubTestnet } : {};
 
 	const [walletClient] = await hre.viem.getWalletClients(chainOption);
 	const publicClient = await hre.viem.getPublicClient(chainOption);
 
-	console.log("Deploying Verifier (PVM/resolc)...");
-	const verifierAddress = await deployContract(walletClient, publicClient, "Verifier");
-	console.log(`Verifier deployed to: ${verifierAddress}`);
-
-	console.log("Deploying MedicalMarket (PVM/resolc)...");
-	const marketAddress = await deployContract(walletClient, publicClient, "MedicalMarket", [
-		verifierAddress,
+	console.log(`Deploying MedicAuthority with initial authority: ${multisigH160}`);
+	const marketAddress = await deployContract(walletClient, publicClient, "MedicAuthority", [
+		[multisigH160],
 	]);
-	console.log(`MedicalMarket deployed to: ${marketAddress}`);
+	console.log(`MedicAuthority deployed to: ${marketAddress}`);
 
-	updateDeployments({ medicalMarket: marketAddress, verifier: verifierAddress });
+	updateDeployments({ medicAuthority: marketAddress });
 	console.log("Updated deployments.json and web/src/config/deployments.ts");
 }
 

@@ -4,9 +4,13 @@ export const deployments: {
 	pvm: string | null;
 	medicalMarket: string | null;
 	verifier: string | null;
+	medicAuthority: string | null;
+	multisig: { ss58: string; h160: string; threshold: number; signatories: string[] } | null;
 } = {
 	evm: "0xec8d19d09cdbaf5dd0a086bad5838bef508b218c",
 	pvm: "0xb7d9b15b26afbde6f142da27574662d5855484db",
 	medicalMarket: "0xb3f616654e64990e8ff0db69c20219b22cfc6784",
 	verifier: "0x3fdd9b0da39c3c450ab49b353ccc2cbcd493e515",
+	medicAuthority: null,
+	multisig: null,
 };

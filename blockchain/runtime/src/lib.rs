@@ -225,6 +225,8 @@ mod runtime {
 
 	#[runtime::pallet_index(15)]
 	pub type Sudo = pallet_sudo;
+	#[runtime::pallet_index(16)]
+	pub type Multisig = pallet_multisig;
 
 	#[runtime::pallet_index(20)]
 	pub type Authorship = pallet_authorship;

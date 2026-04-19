@@ -5,6 +5,7 @@ import { signMessage, derivePublicKey } from "@zk-kit/eddsa-poseidon";
 import { blake2b } from "blakejs";
 import { evmDevAccounts } from "../config/evm";
 import FileDropZone from "../components/FileDropZone";
+import VerifiedBadge from "../components/VerifiedBadge";
 
 interface MerklePackage {
 	fields: Record<string, unknown>;
@@ -165,6 +166,12 @@ export default function MedicSign() {
 						</option>
 					))}
 				</select>
+				<div className="flex items-center gap-2">
+					<span className="text-text-muted text-xs font-mono">
+						{evmDevAccounts[selectedAccount].account.address}
+					</span>
+					<VerifiedBadge address={evmDevAccounts[selectedAccount].account.address} />
+				</div>
 			</div>
 
 			{/* Step 1 — Upload Record */}
