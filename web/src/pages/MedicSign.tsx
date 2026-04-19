@@ -1,29 +1,13 @@
 import { useState, useCallback } from "react";
-import { LeanIMT } from "@zk-kit/lean-imt";
-import { poseidon2 } from "poseidon-lite";
 import { signMessage, derivePublicKey } from "@zk-kit/eddsa-poseidon";
-import { blake2b } from "blakejs";
 import { evmDevAccounts } from "../config/evm";
 import FileDropZone from "../components/FileDropZone";
-
-interface MerklePackage {
-	fields: Record<string, unknown>;
-	merkleRoot: string;
-	merkleTree: { leaves: string[]; depth: number };
-	signature: { R8x: string; R8y: string; S: string };
-	publicKey: { x: string; y: string };
-	signedAt: string;
-}
-
-/** Hash a string to a bigint that fits within the BN254 scalar field (< 2^248). */
-function stringToBigint(s: string): bigint {
-	const bytes = new TextEncoder().encode(s);
-	const hash = blake2b(bytes, undefined, 32);
-	const hex = Array.from(hash.slice(0, 31))
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	return BigInt("0x" + hex);
-}
+import {
+	encodeRecordToFieldElements,
+	computeRecordCommit,
+	MAX_PAYLOAD_BYTES,
+	type SignedRecord,
+} from "../utils/zk";
 
 function bigintToHex(n: bigint): string {
 	return "0x" + n.toString(16).padStart(64, "0");
@@ -44,10 +28,11 @@ export default function MedicSign() {
 	const [parseError, setParseError] = useState<string | null>(null);
 
 	// Step 2
-	const [building, setBuilding] = useState(false);
-	const [merkleRoot, setMerkleRoot] = useState<string | null>(null);
-	const [leaves, setLeaves] = useState<string[]>([]);
-	const [treeDepth, setTreeDepth] = useState(0);
+	const [encoding, setEncoding] = useState(false);
+	const [encodeError, setEncodeError] = useState<string | null>(null);
+	const [plaintext, setPlaintext] = useState<bigint[] | null>(null);
+	const [recordCommit, setRecordCommit] = useState<bigint | null>(null);
+	const [byteCount, setByteCount] = useState<number | null>(null);
 
 	// Step 3
 	const [sig, setSig] = useState<{ R8x: string; R8y: string; S: string } | null>(null);
@@ -55,7 +40,10 @@ export default function MedicSign() {
 
 	const onFileBytes = useCallback((bytes: Uint8Array) => {
 		setParseError(null);
-		setMerkleRoot(null);
+		setEncodeError(null);
+		setPlaintext(null);
+		setRecordCommit(null);
+		setByteCount(null);
 		setSig(null);
 		setPubKey(null);
 		setStep(1);
@@ -81,31 +69,37 @@ export default function MedicSign() {
 		}
 	}, []);
 
-	async function buildTree() {
+	async function encodeAndCommit() {
 		if (!fields) return;
-		setBuilding(true);
+		setEncoding(true);
+		setEncodeError(null);
 		try {
-			const hashFn = (a: bigint, b: bigint) => poseidon2([a, b]);
-			const tree = new LeanIMT<bigint>(hashFn);
-			const treeLeaves: string[] = [];
-			for (const [k, v] of fields) {
-				const leaf = poseidon2([stringToBigint(k), stringToBigint(v)]);
-				tree.insert(leaf);
-				treeLeaves.push(bigintToHex(leaf));
+			const record = Object.fromEntries(fields);
+			const pt = encodeRecordToFieldElements(record);
+			const commit = computeRecordCommit(pt);
+
+			// Compute byte count by re-encoding (same logic as encodeRecordToFieldElements)
+			const enc = new TextEncoder();
+			const keys = Object.keys(record).sort();
+			let total = 0;
+			for (const k of keys) {
+				total += enc.encode(k).length + 1 + enc.encode(String(record[k])).length + 1;
 			}
-			setMerkleRoot(bigintToHex(tree.root));
-			setLeaves(treeLeaves);
-			setTreeDepth(tree.depth);
+
+			setPlaintext(pt);
+			setRecordCommit(commit);
+			setByteCount(total);
+		} catch (err) {
+			setEncodeError(err instanceof Error ? err.message : String(err));
 		} finally {
-			setBuilding(false);
+			setEncoding(false);
 		}
 	}
 
 	function signWithWallet() {
-		if (!merkleRoot) return;
+		if (!recordCommit) return;
 		const privKey = evmDevAccounts[selectedAccount].privateKey;
-		const rootBigint = BigInt(merkleRoot);
-		const signature = signMessage(privKey, rootBigint);
+		const signature = signMessage(privKey, recordCommit);
 		const pk = derivePublicKey(privKey);
 		setSig({
 			R8x: bigintToHex(signature.R8[0]),
@@ -116,14 +110,15 @@ export default function MedicSign() {
 	}
 
 	function downloadPackage() {
-		if (!fields || !merkleRoot || !sig || !pubKey) return;
-		const pkg: MerklePackage = {
-			fields: Object.fromEntries(fields),
-			merkleRoot,
-			merkleTree: { leaves, depth: treeDepth },
+		if (!fields || !recordCommit || !plaintext || !sig || !pubKey) return;
+		const pkg: SignedRecord = {
+			version: "v2-record",
+			plaintext: plaintext.map((n) => n.toString()),
+			recordCommit: recordCommit.toString(),
 			signature: sig,
-			publicKey: pubKey,
+			medicPublicKey: pubKey,
 			signedAt: new Date().toISOString(),
+			fieldsPreview: Object.fromEntries(fields),
 		};
 		const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: "application/json" });
 		const url = URL.createObjectURL(blob);
@@ -220,30 +215,55 @@ export default function MedicSign() {
 				)}
 			</div>
 
-			{/* Step 2 — Construct Merkle Tree */}
+			{/* Step 2 — Encode & Commit */}
 			{(step >= 2 || stepDone(1)) && (
 				<div className="card space-y-4">
 					<StepHeader
 						number={2}
-						title="Construct Merkle Tree"
+						title="Encode &amp; Commit"
 						active={stepActive(2)}
 						done={stepDone(2)}
 					/>
 
-					{!merkleRoot ? (
-						<button onClick={buildTree} disabled={building} className="btn-secondary">
-							{building ? "Building…" : "Build Poseidon Merkle Tree"}
+					{encodeError && (
+						<div className="rounded-lg border border-accent-red/30 bg-accent-red/10 p-4 space-y-1">
+							<p className="text-accent-red text-sm font-medium">Encoding failed</p>
+							<p className="text-accent-red/80 text-xs">{encodeError}</p>
+							{encodeError.includes("too large") && (
+								<p className="text-text-muted text-xs mt-1">
+									Trim field values or reduce the number of fields so the
+									canonicalised record fits within {MAX_PAYLOAD_BYTES} bytes.
+								</p>
+							)}
+							{encodeError.includes("reserved control byte") && (
+								<p className="text-text-muted text-xs mt-1">
+									Remove any unit-separator (U+001F) or record-separator (U+001E)
+									characters from your field keys and values.
+								</p>
+							)}
+						</div>
+					)}
+
+					{!recordCommit ? (
+						<button
+							onClick={encodeAndCommit}
+							disabled={encoding}
+							className="btn-secondary"
+						>
+							{encoding ? "Encoding…" : "Encode & Compute Commit"}
 						</button>
 					) : (
 						<div className="space-y-3">
 							<div>
-								<label className="label">Merkle Root</label>
+								<label className="label">Record Commit</label>
 								<div className="input-field font-mono text-xs text-text-secondary flex items-center justify-between gap-2">
-									<span className="truncate">{merkleRoot}</span>
+									<span className="truncate">{recordCommit.toString()}</span>
 								</div>
-								<p className="text-xs text-text-muted mt-1">
-									{leaves.length} leaves · depth {treeDepth}
-								</p>
+								{byteCount !== null && (
+									<p className="text-xs text-text-muted mt-1">
+										{byteCount} / {MAX_PAYLOAD_BYTES} bytes used
+									</p>
+								)}
 							</div>
 							<button
 								onClick={() => setStep(3)}
@@ -269,7 +289,7 @@ export default function MedicSign() {
 
 					{!sig ? (
 						<button onClick={signWithWallet} className="btn-primary">
-							Sign Merkle Root with Wallet
+							Sign Commit with Wallet
 						</button>
 					) : (
 						<div className="space-y-3">

@@ -10,6 +10,12 @@ import { getClient } from "../hooks/useChain";
 import { getStackTemplateDescriptor } from "../hooks/useConnection";
 import { useChainStore } from "../store/chainStore";
 import { formatDispatchError } from "../utils/format";
+import {
+	getOrCreateBuyerKey,
+	deserializeCiphertext,
+	computeCiphertextHash,
+	decryptRecord,
+} from "../utils/zk";
 
 // Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
 const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
@@ -20,8 +26,7 @@ const WEI_TO_PLANCK = 1_000_000n;
 
 interface Listing {
 	id: bigint;
-	merkleRoot: `0x${string}`;
-	statementHash: `0x${string}`;
+	recordCommit: bigint;
 	title: string;
 	price: bigint;
 	patient: Address;
@@ -36,11 +41,13 @@ interface Order {
 	amount: bigint;
 	confirmed: boolean;
 	cancelled: boolean;
+	pkBuyerX: bigint;
+	pkBuyerY: bigint;
 }
 
-interface RetrievedData {
+interface DecryptedRecord {
 	orderId: bigint;
-	json: string;
+	fields: Record<string, string>;
 }
 
 function hexToBytes(hex: string): Uint8Array {
@@ -50,6 +57,11 @@ function hexToBytes(hex: string): Uint8Array {
 		out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
 	}
 	return out;
+}
+
+/** Convert a uint256 bigint to a 0x-prefixed 32-byte big-endian hex string (64 hex chars). */
+function uint256ToHashHex(n: bigint): string {
+	return "0x" + n.toString(16).padStart(64, "0");
 }
 
 export default function ResearcherBuy() {
@@ -66,7 +78,7 @@ export default function ResearcherBuy() {
 	const [orders, setOrders] = useState<Order[]>([]);
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
-	const [retrievedData, setRetrievedData] = useState<Record<string, RetrievedData>>({});
+	const [decryptedRecords, setDecryptedRecords] = useState<Record<string, DecryptedRecord>>({});
 	const [stmtCache, setStmtCache] = useState<Map<string, Uint8Array>>(new Map());
 
 	// Subscribe to statement store (live in Host, one-shot dump in local dev)
@@ -192,8 +204,8 @@ export default function ResearcherBuy() {
 					abi: medicalMarketAbi,
 					functionName: "getListing",
 					args: [i],
-				})) as [string, string, string, bigint, string, boolean];
-				const [merkleRoot, statementHash, title, price, patient, active] = result;
+				})) as [bigint, string, bigint, string, boolean];
+				const [recordCommit, title, price, patient, active] = result;
 				if (!active) continue;
 				const pendingOrderId = (await client.readContract({
 					address: addr,
@@ -203,8 +215,7 @@ export default function ResearcherBuy() {
 				})) as bigint;
 				fetchedListings.push({
 					id: i,
-					merkleRoot: merkleRoot as `0x${string}`,
-					statementHash: statementHash as `0x${string}`,
+					recordCommit,
 					title,
 					price,
 					patient: patient as Address,
@@ -227,8 +238,9 @@ export default function ResearcherBuy() {
 					abi: medicalMarketAbi,
 					functionName: "getOrder",
 					args: [i],
-				})) as [bigint, string, bigint, boolean, boolean];
-				const [listingId, researcher, amount, confirmed, cancelled] = result;
+				})) as [bigint, string, bigint, boolean, boolean, bigint, bigint];
+				const [listingId, researcher, amount, confirmed, cancelled, pkBuyerX, pkBuyerY] =
+					result;
 				if (researcher.toLowerCase() !== currentAccount.evmAddress.toLowerCase()) continue;
 				fetchedOrders.push({
 					id: i,
@@ -237,11 +249,12 @@ export default function ResearcherBuy() {
 					amount,
 					confirmed,
 					cancelled,
+					pkBuyerX,
+					pkBuyerY,
 				});
 			}
 			setOrders(fetchedOrders);
 		} catch (e) {
-			console.error("Failed to load marketplace data:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		} finally {
 			setLoading(false);
@@ -251,16 +264,17 @@ export default function ResearcherBuy() {
 	async function placeBuyOrder(listing: Listing) {
 		if (!contractAddress) return;
 		try {
-			setTxStatus(`Placing buy order for listing #${listing.id}...`);
+			setTxStatus("Placing order...");
+			const skStorageKey = `phase5-sk-buyer:${currentAccount.evmAddress}:${ethRpcUrl}:${listing.id}`;
+			const { pk } = getOrCreateBuyerKey(skStorageKey);
 			const { txHash } = await reviveCall(
 				"placeBuyOrder",
-				[listing.id],
-				listing.price, // price is in EVM wei; reviveCall converts to planck
+				[listing.id, pk.x, pk.y],
+				listing.price,
 			);
 			setTxStatus(`Buy order placed. Tx: ${txHash}`);
 			loadAll();
 		} catch (e) {
-			console.error("placeBuyOrder failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}
@@ -275,70 +289,67 @@ export default function ResearcherBuy() {
 			);
 			loadAll();
 		} catch (e) {
-			console.error("cancelOrder failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}
 
-	async function retrieveData(order: Order) {
+	async function decryptAndView(order: Order) {
 		if (!contractAddress) return;
 		try {
-			setTxStatus(`Retrieving data for order #${order.id}...`);
+			setTxStatus("Reading fulfillment...");
 			const client = getPublicClient(ethRpcUrl);
 			const addr = contractAddress as Address;
 
-			const listingResult = (await client.readContract({
+			const fulfillment = (await client.readContract({
 				address: addr,
 				abi: medicalMarketAbi,
-				functionName: "getListing",
-				args: [order.listingId],
-			})) as [string, string, string, bigint, string, boolean];
-			const statementHash = listingResult[1] as string;
-
-			setTxStatus("Reading decryption key from contract...");
-			const keyHex = (await client.readContract({
-				address: addr,
-				abi: medicalMarketAbi,
-				functionName: "getDecryptionKey",
+				functionName: "getFulfillment",
 				args: [order.id],
-			})) as `0x${string}`;
+			})) as [bigint, bigint, bigint];
+			const [ephPkX, ephPkY, ciphertextHash] = fulfillment;
 
-			if (keyHex === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+			if (ciphertextHash === 0n) {
 				setTxStatus(
-					"Error: Decryption key not posted yet. Wait for the patient to submit the key.",
+					"Patient hasn't uploaded the ciphertext yet — check back in a few blocks.",
 				);
 				return;
 			}
 
-			setTxStatus("Looking up encrypted data in statement cache...");
-			const data = stmtCache.get(statementHash);
-			if (!data) {
+			setTxStatus("Fetching from Statement Store...");
+			const targetHashHex = uint256ToHashHex(ciphertextHash);
+			const matchedData = stmtCache.get(targetHashHex);
+
+			if (!matchedData) {
 				setTxStatus(
-					`Error: Statement ${statementHash.slice(0, 10)}… not found yet. Wait for the subscription to deliver it.`,
+					"Patient hasn't uploaded the ciphertext yet — check back in a few blocks.",
 				);
 				return;
 			}
 
-			setTxStatus("Decrypting...");
-			const keyBytes = hexToBytes(keyHex);
-			const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, [
-				"decrypt",
-			]);
-			const iv = data.slice(0, 12);
-			const ciphertext = data.slice(12);
-			const plaintextBuf = await crypto.subtle.decrypt(
-				{ name: "AES-GCM", iv },
-				cryptoKey,
-				ciphertext,
-			);
-			const json = new TextDecoder().decode(plaintextBuf);
-			setRetrievedData((prev) => ({
+			setTxStatus("Verifying hash...");
+			const ciphertext = deserializeCiphertext(matchedData);
+			const computed = computeCiphertextHash(ciphertext);
+			if (computed !== ciphertextHash) {
+				setTxStatus("Error: ciphertext integrity failed");
+				return;
+			}
+
+			setTxStatus("Decrypting record...");
+			const skStorageKey = `phase5-sk-buyer:${currentAccount.evmAddress}:${ethRpcUrl}:${order.listingId}`;
+			const { sk } = getOrCreateBuyerKey(skStorageKey);
+			const fields = decryptRecord({
+				ephPk: { x: ephPkX, y: ephPkY },
+				ciphertextBytes: matchedData,
+				skBuyer: sk,
+				nonce: order.id,
+			});
+
+			setDecryptedRecords((prev) => ({
 				...prev,
-				[order.id.toString()]: { orderId: order.id, json },
+				[order.id.toString()]: { orderId: order.id, fields },
 			}));
-			setTxStatus("Data decrypted successfully!");
+			setTxStatus("Done");
 		} catch (e) {
-			console.error("retrieveData failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}
@@ -365,7 +376,7 @@ export default function ResearcherBuy() {
 				<h1 className="page-title text-accent-blue">Researcher Dashboard</h1>
 				<p className="text-text-secondary">
 					Browse active medical data listings, place buy orders, and decrypt confirmed
-					data using the key the patient posts on-chain.
+					data via ECDH after the patient fulfills your order.
 				</p>
 			</div>
 
@@ -465,8 +476,12 @@ export default function ResearcherBuy() {
 									)}
 								</div>
 								<p className="font-mono text-xs text-text-muted break-all">
-									Root: {listing.merkleRoot.slice(0, 18)}…
-									{listing.merkleRoot.slice(-8)}
+									Commit:{" "}
+									{listing.recordCommit
+										.toString(16)
+										.slice(0, 12)
+										.padStart(12, "0")}
+									…
 								</p>
 								<p className="text-text-tertiary">
 									Patient:{" "}
@@ -496,7 +511,7 @@ export default function ResearcherBuy() {
 					<div className="space-y-2">
 						{orders.map((order) => {
 							const key = order.id.toString();
-							const retrieved = retrievedData[key];
+							const decrypted = decryptedRecords[key];
 							return (
 								<div
 									key={key}
@@ -530,9 +545,9 @@ export default function ResearcherBuy() {
 											Cancel &amp; Refund
 										</button>
 									)}
-									{order.confirmed && !retrieved && (
+									{order.confirmed && !decrypted && (
 										<button
-											onClick={() => retrieveData(order)}
+											onClick={() => decryptAndView(order)}
 											className="btn-accent text-xs px-3 py-1 mt-1"
 											style={{
 												background:
@@ -541,17 +556,33 @@ export default function ResearcherBuy() {
 													"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 											}}
 										>
-											Retrieve Data
+											Decrypt &amp; View
 										</button>
 									)}
-									{retrieved && (
+									{decrypted && (
 										<div className="mt-2 space-y-1">
 											<p className="text-text-secondary text-xs font-medium">
-												Retrieved data:
+												Decrypted record:
 											</p>
-											<pre className="rounded-md bg-white/[0.03] border border-white/[0.04] p-2 text-xs font-mono text-text-primary overflow-x-auto whitespace-pre-wrap break-all">
-												{retrieved.json}
-											</pre>
+											<table className="w-full text-xs border-collapse">
+												<tbody>
+													{Object.entries(decrypted.fields).map(
+														([field, value]) => (
+															<tr
+																key={field}
+																className="border-b border-white/[0.04] last:border-0"
+															>
+																<td className="py-1 pr-3 text-text-tertiary font-mono whitespace-nowrap align-top">
+																	{field}
+																</td>
+																<td className="py-1 text-text-primary break-all">
+																	{value}
+																</td>
+															</tr>
+														),
+													)}
+												</tbody>
+											</table>
 										</div>
 									)}
 								</div>

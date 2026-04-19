@@ -2,21 +2,16 @@ import { useState, useCallback, useEffect } from "react";
 import { type Address, parseEther, formatEther, encodeFunctionData } from "viem";
 import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
 import { filter, firstValueFrom } from "rxjs";
-import { blake2b } from "blakejs";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import { deployments } from "../config/deployments";
-import {
-	submitStatement,
-	checkStatementStoreAvailable,
-	MARKETPLACE_ACCOUNT_ID,
-} from "../hooks/useStatementStore";
+import { submitToStatementStore, checkStatementStoreAvailable } from "../hooks/useStatementStore";
 import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
 import { getClient } from "../hooks/useChain";
 import { getStackTemplateDescriptor } from "../hooks/useConnection";
 import { useChainStore } from "../store/chainStore";
 import { formatDispatchError } from "../utils/format";
 import FileDropZone from "../components/FileDropZone";
-import { type MerklePackage } from "../utils/zk";
+import { type SignedRecord, generateProofFromRecord } from "../utils/zk";
 
 // Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
 const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
@@ -25,18 +20,9 @@ const CALL_WEIGHT = { ref_time: 3_000_000_000n, proof_size: 1_048_576n };
 // pallet-revive: 1 planck = 10^6 EVM wei (for 12-decimal chains).
 const WEI_TO_PLANCK = 1_000_000n;
 
-interface SignedPackage {
-	fields: Record<string, unknown>;
-	merkleRoot: string;
-	merkleTree: { leaves: string[]; depth: number };
-	signature: { R8x: string; R8y: string; S: string };
-	publicKey: { x: string; y: string };
-	signedAt: string;
-}
-
 interface Listing {
 	id: bigint;
-	merkleRoot: `0x${string}`;
+	recordCommit: bigint;
 	title: string;
 	price: bigint;
 	patient: string;
@@ -60,23 +46,6 @@ function hexToBytes(hex: string): Uint8Array {
 	return out;
 }
 
-async function encryptData(
-	plaintext: Uint8Array,
-): Promise<{ encrypted: Uint8Array; keyHex: `0x${string}` }> {
-	const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
-		"encrypt",
-		"decrypt",
-	]);
-	const iv = crypto.getRandomValues(new Uint8Array(12));
-	const ciphertextBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
-	const ciphertext = new Uint8Array(ciphertextBuf);
-	const encrypted = new Uint8Array(iv.length + ciphertext.length);
-	encrypted.set(iv, 0);
-	encrypted.set(ciphertext, iv.length);
-	const rawKey = new Uint8Array(await crypto.subtle.exportKey("raw", key));
-	return { encrypted, keyHex: bytesToHex(rawKey) };
-}
-
 export default function PatientDashboard() {
 	const ethRpcUrl = useChainStore((s) => s.ethRpcUrl);
 	const wsUrl = useChainStore((s) => s.wsUrl);
@@ -88,7 +57,7 @@ export default function PatientDashboard() {
 	const [selectedAccountIndex, setSelectedAccountIndex] = useState(0);
 	const [contractAddress, setContractAddress] = useState("");
 	const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
-	const [importedPackage, setImportedPackage] = useState<SignedPackage | null>(null);
+	const [importedPackage, setImportedPackage] = useState<SignedRecord | null>(null);
 	const [packageParseError, setPackageParseError] = useState<string | null>(null);
 	const [statementStoreAvailable, setStatementStoreAvailable] = useState<boolean | null>(null);
 	const [titleStr, setTitleStr] = useState("");
@@ -96,7 +65,6 @@ export default function PatientDashboard() {
 	const [listings, setListings] = useState<Listing[]>([]);
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
-	const [selectedField, setSelectedField] = useState<string>("");
 
 	// Load accounts: Nova Wallet → browser extension → dev fallback
 	useEffect(() => {
@@ -139,15 +107,17 @@ export default function PatientDashboard() {
 			if (
 				typeof json === "object" &&
 				json !== null &&
-				"merkleRoot" in json &&
-				"fields" in json &&
+				"version" in json &&
+				(json as Record<string, unknown>).version === "v2-record" &&
+				"recordCommit" in json &&
+				"plaintext" in json &&
 				"signature" in json
 			) {
-				setImportedPackage(json as SignedPackage);
+				setImportedPackage(json as SignedRecord);
 			} else {
 				setImportedPackage(null);
 				setPackageParseError(
-					"Not a valid signed record. Use the Medic Signing Tool to produce one.",
+					"Not a valid v2 signed record. Use the Medic Signing Tool to produce one.",
 				);
 			}
 		} catch {
@@ -259,14 +229,15 @@ export default function PatientDashboard() {
 
 			const result: Listing[] = [];
 			for (let i = 0n; i < count; i++) {
+				// getListing returns 5 fields: recordCommit, title, price, patient, active
 				const rawTuple = (await client.readContract({
 					address: addr,
 					abi: medicalMarketAbi,
 					functionName: "getListing",
 					args: [i],
-				})) as readonly [`0x${string}`, `0x${string}`, string, bigint, string, boolean];
+				})) as readonly [bigint, string, bigint, string, boolean];
 
-				const [merkleRoot, , title, price, patient, active] = rawTuple;
+				const [recordCommit, title, price, patient, active] = rawTuple;
 
 				if (patient.toLowerCase() !== currentAccount.evmAddress.toLowerCase()) continue;
 
@@ -277,11 +248,10 @@ export default function PatientDashboard() {
 					args: [i],
 				});
 
-				result.push({ id: i, merkleRoot, title, price, patient, active, pendingOrderId });
+				result.push({ id: i, recordCommit, title, price, patient, active, pendingOrderId });
 			}
 			setListings(result);
 		} catch (e) {
-			console.error("Failed to load listings:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		} finally {
 			setLoading(false);
@@ -305,38 +275,15 @@ export default function PatientDashboard() {
 			setTxStatus("Error: Enter a valid price in PAS");
 			return;
 		}
-		if (statementStoreAvailable === false) {
-			setTxStatus("Error: Statement Store is not available. Start the local node first.");
-			return;
-		}
 
 		try {
 			if (!(await verifyContract())) return;
 
-			setTxStatus("Encrypting signed record...");
-			const { encrypted, keyHex } = await encryptData(fileBytes);
-
-			const ciphertextHash32 = blake2b(encrypted, undefined, 32);
-			const ciphertextHash = bytesToHex(ciphertextHash32);
-
-			setTxStatus("Submitting encrypted data to Statement Store...");
-			// Use localSigner when present — Nova Wallet's signRaw adds a <Bytes>
-			// prefix that the substrate statement store rejects.
-			const stmtSigner = currentAccount.localSigner ?? currentAccount.signer;
-			await submitStatement(
-				wsUrl,
-				encrypted,
-				ciphertextHash32,
-				MARKETPLACE_ACCOUNT_ID,
-				stmtSigner.publicKey, // ignored in Host mode
-				stmtSigner.signBytes, // ignored in Host mode
-			);
-
 			setTxStatus("Creating listing on-chain...");
+			const recordCommit = BigInt(importedPackage.recordCommit);
 			const priceWei = parseEther(priceStr);
 			const { txHash } = await reviveCall("createListing", [
-				importedPackage.merkleRoot as `0x${string}`,
-				ciphertextHash,
+				recordCommit,
 				titleStr.trim(),
 				priceWei,
 			]);
@@ -349,21 +296,18 @@ export default function PatientDashboard() {
 					abi: medicalMarketAbi,
 					functionName: "getListingCount",
 				})) as bigint) - 1n;
-			localStorage.setItem(`aes-key:${ethRpcUrl}:${listingId}`, keyHex);
 			localStorage.setItem(
 				`signed-pkg:${ethRpcUrl}:${listingId}`,
 				JSON.stringify(importedPackage),
 			);
 
-			setTxStatus(
-				"Listing created! Keep this tab open — you'll need to submit the key when a researcher pays.",
-			);
+			setTxStatus("Listing created! Come back here when a researcher places a buy order.");
 			setFileBytes(null);
+			setImportedPackage(null);
 			setTitleStr("");
 			setPriceStr("");
 			loadListings();
 		} catch (e) {
-			console.error("createListing failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}
@@ -373,97 +317,63 @@ export default function PatientDashboard() {
 		try {
 			if (!(await verifyContract())) return;
 
-			const keyHex = localStorage.getItem(`aes-key:${ethRpcUrl}:${listingId}`);
-			if (!keyHex) {
-				setTxStatus(
-					`Error: No decryption key for listing #${listingId}. Was it created in another session?`,
-				);
+			if (statementStoreAvailable === false) {
+				setTxStatus("Error: Statement Store unavailable — start the local node first.");
 				return;
 			}
+
 			const pkgJson = localStorage.getItem(`signed-pkg:${ethRpcUrl}:${listingId}`);
 			if (!pkgJson) {
 				setTxStatus(
-					`Error: Signed package not found for listing #${listingId}. Re-create the listing.`,
+					`Error: Signed package not found for listing #${listingId}. Re-create the listing in this browser.`,
 				);
 				return;
 			}
-			const pkg = JSON.parse(pkgJson) as MerklePackage;
-			const fieldKeys = Object.keys(pkg.fields);
-			if (!selectedField || !fieldKeys.includes(selectedField)) {
-				setTxStatus("Error: Select a field to prove first.");
-				return;
-			}
+			const pkg = JSON.parse(pkgJson) as SignedRecord;
 
-			setTxStatus("Generating ZK proof… (10–30s, browser may pause briefly)");
-			const { generateProofForField } = await import("../utils/zk");
-			const zkProof = await generateProofForField(pkg, selectedField);
+			// 1. Read order's pkBuyer
+			// getOrder returns: [listingId, researcher, amount, confirmed, cancelled, pkBuyerX, pkBuyerY]
+			const order = (await getPublicClient(ethRpcUrl).readContract({
+				address: contractAddress as Address,
+				abi: medicalMarketAbi,
+				functionName: "getOrder",
+				args: [orderId],
+			})) as unknown as readonly [bigint, string, bigint, boolean, boolean, bigint, bigint];
+			const pkBuyer = { x: order[5], y: order[6] };
 
-			// ---- ZK fulfill diagnostic dump ---------------------------------------
-			// Revive.ContractReverted swallows the Solidity revert reason, so we log
-			// every value that fulfill() asserts on, to narrow down which `require`
-			// tripped. Remove once the fulfill flow is reliably green.
-			try {
-				const publicClient = getPublicClient(ethRpcUrl);
-				const addr = contractAddress as Address;
-				const listingResult = (await publicClient.readContract({
-					address: addr,
-					abi: medicalMarketAbi,
-					functionName: "getListing",
-					args: [listingId],
-				})) as [string, string, string, bigint, string, boolean];
-				const [onChainMerkleRoot, statementHash, , , onChainPatient] = listingResult;
-				const pubSignal0Hex = `0x${zkProof.pubSignals[0].toString(16).padStart(64, "0")}`;
-				console.log("[fulfill] diagnostic dump", {
-					orderId: orderId.toString(),
-					listingId: listingId.toString(),
-					caller_evmAddress: currentAccount.evmAddress,
-					onChain_patient: onChainPatient,
-					caller_matches_patient:
-						currentAccount.evmAddress.toLowerCase() === onChainPatient.toLowerCase(),
-					onChain_merkleRoot: onChainMerkleRoot,
-					pubSignals_0_as_bytes32: pubSignal0Hex,
-					merkleRoot_matches_pubSignal0:
-						onChainMerkleRoot.toLowerCase() === pubSignal0Hex.toLowerCase(),
-					pubSignals_raw: zkProof.pubSignals.map((x) => x.toString()),
-					proof_a: zkProof.a.map((x) => x.toString()),
-					proof_b: zkProof.b.map((row) => row.map((x) => x.toString())),
-					proof_c: zkProof.c.map((x) => x.toString()),
-					deployments_verifier: deployments.verifier,
-					note:
-						"medicalMarketAbi has no `verifier()` entry; compare deployments_verifier " +
-						"manually via `cast call <MedicalMarket> 'verifier()(address)' --rpc-url ...`",
-					statementHash,
-					decryption_keyHex: keyHex,
-				});
-			} catch (diagErr) {
-				console.warn("[fulfill] diagnostic dump failed:", diagErr);
-			}
-			// ------------------------------------------------------------------------
+			// 2. Generate ZK proof + ciphertext
+			setTxStatus("Generating ZK proof… (1–3s)");
+			const { proof, ciphertextBytes } = await generateProofFromRecord({
+				plaintext: pkg.plaintext.map(BigInt),
+				medicSignature: pkg.signature,
+				medicPublicKey: pkg.medicPublicKey,
+				pkBuyer,
+				nonce: orderId,
+			});
 
-			setTxStatus("Submitting proof and decryption key on-chain...");
+			// 3. Upload ciphertext to Statement Store — abort if it fails
+			setTxStatus("Uploading ciphertext to Statement Store…");
+			const stmtSigner = currentAccount.localSigner ?? currentAccount.signer;
+			await submitToStatementStore(
+				wsUrl,
+				ciphertextBytes,
+				stmtSigner.publicKey,
+				stmtSigner.signBytes,
+			);
+
+			// 4. Submit fulfill on-chain
+			setTxStatus("Submitting fulfill on-chain…");
 			const { txHash } = await reviveCall("fulfill", [
 				orderId,
-				keyHex as `0x${string}`,
-				zkProof.a,
-				zkProof.b,
-				zkProof.c,
-				zkProof.pubSignals,
+				proof.a,
+				proof.b,
+				proof.c,
+				proof.pubSignals,
 			]);
-			setTxStatus(`Transaction finalized: ${txHash}`);
+			setTxStatus(`Done. Tx: ${txHash}`);
 			loadListings();
 		} catch (e) {
-			console.error("fulfill failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
-		}
-	}
-
-	function getSignedPkgFields(listingId: bigint): string[] {
-		try {
-			const json = localStorage.getItem(`signed-pkg:${ethRpcUrl}:${listingId}`);
-			if (!json) return [];
-			return Object.keys((JSON.parse(json) as MerklePackage).fields);
-		} catch {
-			return [];
 		}
 	}
 
@@ -476,7 +386,6 @@ export default function PatientDashboard() {
 			setTxStatus(`Listing cancelled. Tx: ${txHash}`);
 			loadListings();
 		} catch (e) {
-			console.error("cancelListing failed:", e);
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}
@@ -486,10 +395,18 @@ export default function PatientDashboard() {
 			<div className="space-y-2">
 				<h1 className="page-title text-polka-500">Patient Dashboard</h1>
 				<p className="text-text-secondary">
-					Encrypt and list medical records for sale. The buyer receives the decryption key
-					only after you confirm the sale — releasing their payment to you.
+					List medic-signed records for sale. When a researcher pays, you generate a ZK
+					proof and the encrypted record is delivered atomically — no trust required.
 				</p>
 			</div>
+
+			{/* Statement Store banner */}
+			{statementStoreAvailable === false && (
+				<div className="rounded-lg border border-accent-red/30 bg-accent-red/[0.06] px-4 py-3 text-sm text-accent-red">
+					Statement Store unavailable — start the local node. Fulfillment is disabled
+					until the node is reachable.
+				</div>
+			)}
 
 			{/* Contract + Account Setup */}
 			<div className="card space-y-4">
@@ -536,10 +453,9 @@ export default function PatientDashboard() {
 			<div className="card space-y-4">
 				<h2 className="section-title">Create Listing</h2>
 				<p className="text-text-muted text-xs">
-					Drop a medic-signed record (downloaded from the Medic Signing Tool). The signed
-					package is encrypted with AES-256-GCM in your browser and uploaded to the
-					Statement Store. The Merkle root is committed on-chain — the decryption key is
-					released only when you confirm the sale.
+					Drop a v2 medic-signed record (downloaded from the Medic Signing Tool). The
+					record commitment is committed on-chain. The ZK proof and encrypted payload are
+					generated and uploaded at fulfillment time — nothing is uploaded now.
 				</p>
 
 				<FileDropZone
@@ -562,21 +478,18 @@ export default function PatientDashboard() {
 					<div className="rounded-lg border border-accent-green/20 bg-accent-green/[0.04] p-3 space-y-1 text-xs">
 						<p className="text-accent-green font-medium">Signed record loaded</p>
 						<p className="text-text-secondary font-mono break-all">
-							Root: {importedPackage.merkleRoot.slice(0, 18)}…
-							{importedPackage.merkleRoot.slice(-8)}
+							Commit:{" "}
+							{BigInt(importedPackage.recordCommit)
+								.toString(16)
+								.padStart(64, "0")
+								.slice(0, 18)}
+							…
 						</p>
 						<p className="text-text-muted">
-							{Object.keys(importedPackage.fields).length} fields · signed{" "}
+							{Object.keys(importedPackage.fieldsPreview).length} fields · signed{" "}
 							{new Date(importedPackage.signedAt).toLocaleString()}
 						</p>
 					</div>
-				)}
-
-				{statementStoreAvailable === false && (
-					<p className="text-accent-red text-xs">
-						Statement Store unavailable — start the local node to enable listing
-						creation.
-					</p>
 				)}
 
 				<div>
@@ -611,7 +524,7 @@ export default function PatientDashboard() {
 								"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 						}}
 					>
-						Encrypt &amp; List
+						List Record
 					</button>
 				)}
 
@@ -648,9 +561,10 @@ export default function PatientDashboard() {
 						{listings.map((listing) => {
 							const hasPendingOrder = listing.pendingOrderId > 0n;
 							const orderIdForFulfill = listing.pendingOrderId - 1n;
-							const hasKey = !!localStorage.getItem(
-								`aes-key:${ethRpcUrl}:${listing.id}`,
+							const hasPackage = !!localStorage.getItem(
+								`signed-pkg:${ethRpcUrl}:${listing.id}`,
 							);
+							const commitHex = listing.recordCommit.toString(16).padStart(64, "0");
 
 							return (
 								<div
@@ -663,8 +577,8 @@ export default function PatientDashboard() {
 												{listing.title}
 											</p>
 											<p className="font-mono text-xs text-text-muted mt-0.5">
-												{listing.merkleRoot.slice(0, 18)}…
-												{listing.merkleRoot.slice(-8)}
+												{bytesToHex(hexToBytes(commitHex)).slice(0, 18)}…
+												{commitHex.slice(-8)}
 											</p>
 										</div>
 										<span
@@ -690,46 +604,33 @@ export default function PatientDashboard() {
 											{formatEther(listing.price)} PAS
 										</span>{" "}
 										| Listing #{listing.id.toString()}
-										{!hasKey && listing.active && hasPendingOrder && (
-											<span className="ml-2 text-accent-red text-xs">
-												(key not found in this browser)
-											</span>
-										)}
 									</p>
 
-									{listing.active && hasPendingOrder && (
-										<div>
-											{getSignedPkgFields(listing.id).length > 0 && (
-												<select
-													value={selectedField}
-													onChange={(e) =>
-														setSelectedField(e.target.value)
-													}
-													className="w-full bg-[#1a1a2e] border border-gray-600 rounded px-2 py-1 text-sm text-white mb-2"
-												>
-													<option value="">Select field to prove…</option>
-													{getSignedPkgFields(listing.id).map((k) => (
-														<option key={k} value={k}>
-															{k}
-														</option>
-													))}
-												</select>
-											)}
-											<button
-												onClick={() =>
-													fulfillOrder(orderIdForFulfill, listing.id)
-												}
-												className="btn-accent text-xs px-3 py-1"
-												style={{
-													background:
-														"linear-gradient(135deg, #e6007a 0%, #bc0062 100%)",
-													boxShadow:
-														"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
-												}}
-											>
-												Submit Key (Order #{orderIdForFulfill.toString()})
-											</button>
-										</div>
+									{listing.active && hasPendingOrder && !hasPackage && (
+										<p className="text-accent-red text-xs">
+											Signed package not found for listing #
+											{listing.id.toString()} — open this page in the browser
+											where you created the listing.
+										</p>
+									)}
+
+									{listing.active && hasPendingOrder && hasPackage && (
+										<button
+											onClick={() =>
+												fulfillOrder(orderIdForFulfill, listing.id)
+											}
+											disabled={statementStoreAvailable === false}
+											className="btn-accent text-xs px-3 py-1 disabled:opacity-40 disabled:cursor-not-allowed"
+											style={{
+												background:
+													"linear-gradient(135deg, #e6007a 0%, #bc0062 100%)",
+												boxShadow:
+													"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
+											}}
+										>
+											Fulfill with ZK Proof (Order #
+											{orderIdForFulfill.toString()})
+										</button>
 									)}
 
 									{listing.active && !hasPendingOrder && (
