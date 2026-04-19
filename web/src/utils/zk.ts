@@ -1,9 +1,5 @@
-import * as snarkjs from "snarkjs";
 import { poseidon2, poseidon4, poseidon16 } from "poseidon-lite";
 import { mulPointEscalar, Base8, order as jubOrder } from "@zk-kit/baby-jubjub";
-
-const WASM_URL = "/circuits/medical_disclosure.wasm";
-const ZKEY_URL = "/circuits/medical_disclosure_final.zkey";
 
 const BN254_R = BigInt(
 	"21888242871839275222246405745257275088548364400416034343698204186575808495617",
@@ -25,13 +21,6 @@ export interface SignedRecord {
 	medicPublicKey: { x: string; y: string };
 	signedAt: string;
 	fieldsPreview: Record<string, string>;
-}
-
-export interface SolidityProof {
-	a: readonly [bigint, bigint];
-	b: readonly [readonly [bigint, bigint], readonly [bigint, bigint]];
-	c: readonly [bigint, bigint];
-	pubSignals: readonly [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
 }
 
 function bytesToBigint(bytes: Uint8Array): bigint {
@@ -172,83 +161,36 @@ export function deserializeCiphertext(bytes: Uint8Array): bigint[] {
 	return result;
 }
 
-export async function generateProofFromRecord(args: {
+/**
+ * Phase 5.2: encrypt the plaintext for a buyer's BabyJubJub pubkey using ECDH +
+ * Poseidon stream cipher. No proof is generated — atomicity is relaxed and the
+ * buyer verifies (recordCommit, medic signature) off-chain after decryption.
+ */
+export function encryptRecordForBuyer(args: {
 	plaintext: bigint[];
-	medicSignature: { R8x: string; R8y: string; S: string };
-	medicPublicKey: { x: string; y: string };
 	pkBuyer: { x: bigint; y: bigint };
 	nonce: bigint;
-}): Promise<{ proof: SolidityProof; ciphertextBytes: Uint8Array }> {
-	const { plaintext, medicSignature, medicPublicKey, pkBuyer, nonce } = args;
-
-	const recordCommit = hashChain32(plaintext);
+}): {
+	ephPk: { x: bigint; y: bigint };
+	ciphertextBytes: Uint8Array;
+	ciphertextHash: bigint;
+} {
+	const { plaintext, pkBuyer, nonce } = args;
 
 	const ephSk = randomScalar();
 	const ephPkPoint = mulPointEscalar(Base8, ephSk);
 	const ephPk = { x: ephPkPoint[0], y: ephPkPoint[1] };
 	const sharedPoint = mulPointEscalar([pkBuyer.x, pkBuyer.y], ephSk);
-	const shared = [sharedPoint[0], sharedPoint[1]];
 
 	const ciphertext = plaintext.map(
-		(p, i) => (p + poseidon4([shared[0], shared[1], nonce, BigInt(i)])) % BN254_R,
+		(p, i) => (p + poseidon4([sharedPoint[0], sharedPoint[1], nonce, BigInt(i)])) % BN254_R,
 	);
 	const ciphertextHash = hashChain32(ciphertext);
 
-	const input = {
-		plaintext,
-		sigR8x: BigInt(medicSignature.R8x),
-		sigR8y: BigInt(medicSignature.R8y),
-		sigS: BigInt(medicSignature.S),
-		ephemeralSk: ephSk,
-		recordCommit,
-		medicPkX: BigInt(medicPublicKey.x),
-		medicPkY: BigInt(medicPublicKey.y),
-		pkBuyerX: pkBuyer.x,
-		pkBuyerY: pkBuyer.y,
-		ephemeralPkX: ephPk.x,
-		ephemeralPkY: ephPk.y,
-		ciphertextHash,
-		nonce,
-	};
-
-	const { proof: zkProof, publicSignals } = await snarkjs.groth16.fullProve(
-		input,
-		WASM_URL,
-		ZKEY_URL,
-	);
-
-	const raw = await snarkjs.groth16.exportSolidityCallData(zkProof, publicSignals);
-	const parsed = JSON.parse("[" + raw + "]") as [string[], string[][], string[], string[]];
-	console.log("[zk.ts v5.1-nosw] raw parsed[1]:", parsed[1]);
-
-	// snarkjs.groth16.exportSolidityCallData already emits G2 points in
-	// Solidity/pairing-precompile order ([x_im, x_re], [y_im, y_re]). Do NOT
-	// swap again — doing so produces natural snarkjs order and the pairing
-	// check fails. (gen_fixture.mjs reads from zkProof.pi_b raw and swaps
-	// manually because that path has not been through exportSolidityCallData.)
-	const solidityProof: SolidityProof = {
-		a: [BigInt(parsed[0][0]), BigInt(parsed[0][1])],
-		b: [
-			[BigInt(parsed[1][0][0]), BigInt(parsed[1][0][1])],
-			[BigInt(parsed[1][1][0]), BigInt(parsed[1][1][1])],
-		],
-		c: [BigInt(parsed[2][0]), BigInt(parsed[2][1])],
-		pubSignals: [
-			BigInt(parsed[3][0]),
-			BigInt(parsed[3][1]),
-			BigInt(parsed[3][2]),
-			BigInt(parsed[3][3]),
-			BigInt(parsed[3][4]),
-			BigInt(parsed[3][5]),
-			BigInt(parsed[3][6]),
-			BigInt(parsed[3][7]),
-			BigInt(parsed[3][8]),
-		],
-	};
-
 	return {
-		proof: solidityProof,
+		ephPk,
 		ciphertextBytes: serializeCiphertext(ciphertext),
+		ciphertextHash,
 	};
 }
 

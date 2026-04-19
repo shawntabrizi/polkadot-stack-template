@@ -44,13 +44,18 @@ export const proofOfExistenceAbi = [
 	},
 ] as const;
 
-// MedicalMarket contract ABI — Phase 5.1 ZKCP atomic swap
+// MedicalMarket contract ABI — Phase 5.2 (off-chain crypto, no on-chain proof)
 export const medicalMarketAbi = [
 	{
 		type: "function",
 		name: "createListing",
 		inputs: [
 			{ name: "recordCommit", type: "uint256" },
+			{ name: "medicPkX", type: "uint256" },
+			{ name: "medicPkY", type: "uint256" },
+			{ name: "sigR8x", type: "uint256" },
+			{ name: "sigR8y", type: "uint256" },
+			{ name: "sigS", type: "uint256" },
 			{ name: "title", type: "string" },
 			{ name: "price", type: "uint256" },
 		],
@@ -73,10 +78,9 @@ export const medicalMarketAbi = [
 		name: "fulfill",
 		inputs: [
 			{ name: "orderId", type: "uint256" },
-			{ name: "a", type: "uint256[2]" },
-			{ name: "b", type: "uint256[2][2]" },
-			{ name: "c", type: "uint256[2]" },
-			{ name: "pubSignals", type: "uint256[9]" },
+			{ name: "ephPkX", type: "uint256" },
+			{ name: "ephPkY", type: "uint256" },
+			{ name: "ciphertextHash", type: "uint256" },
 		],
 		outputs: [],
 		stateMutability: "nonpayable",
@@ -112,6 +116,11 @@ export const medicalMarketAbi = [
 		inputs: [{ name: "id", type: "uint256" }],
 		outputs: [
 			{ name: "recordCommit", type: "uint256" },
+			{ name: "medicPkX", type: "uint256" },
+			{ name: "medicPkY", type: "uint256" },
+			{ name: "sigR8x", type: "uint256" },
+			{ name: "sigR8y", type: "uint256" },
+			{ name: "sigS", type: "uint256" },
 			{ name: "title", type: "string" },
 			{ name: "price", type: "uint256" },
 			{ name: "patient", type: "address" },
@@ -156,19 +165,14 @@ export const medicalMarketAbi = [
 		stateMutability: "view",
 	},
 	{
-		type: "function",
-		name: "verifier",
-		inputs: [],
-		outputs: [{ name: "", type: "address" }],
-		stateMutability: "view",
-	},
-	{
 		type: "event",
 		name: "ListingCreated",
 		inputs: [
 			{ name: "patient", type: "address", indexed: true },
 			{ name: "listingId", type: "uint256", indexed: true },
 			{ name: "recordCommit", type: "uint256", indexed: false },
+			{ name: "medicPkX", type: "uint256", indexed: false },
+			{ name: "medicPkY", type: "uint256", indexed: false },
 			{ name: "title", type: "string", indexed: false },
 			{ name: "price", type: "uint256", indexed: false },
 		],
