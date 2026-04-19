@@ -4,18 +4,29 @@ This file provides context for AI agents working with this repository.
 
 ## Project Purpose
 
-A **decentralized ZK medical data marketplace** built on Polkadot. Patients sell verified health
-data to researchers through atomic, privacy-preserving exchanges — without revealing their
-identity or raw records.
+A **decentralized medical data marketplace** built on Polkadot. Patients sell medic-signed
+health data to researchers through privacy-preserving exchanges — without revealing the
+plaintext to anyone except the paying buyer.
 
-**Core mechanism**: Zero-Knowledge Contingent Payment (ZKCP). A patient generates a ZK proof
-that their data matches a researcher's criteria, encrypts it specifically for that buyer using
-in-circuit ECDH, and submits it to a smart contract that atomically swaps payment for the
-ciphertext. No trust required between parties.
+**Core mechanism (Phase 5.2)**: a medic signs a Poseidon commitment of the record (EdDSA over
+BabyJubJub). The patient lists the commit + medic signature on-chain. When a researcher
+places a buy order with their BabyJubJub pubkey, the patient encrypts the plaintext for that
+pubkey via ECDH + Poseidon stream cipher in the browser, uploads the ciphertext to the
+Statement Store, and calls `fulfill(orderId, ephPk, ciphertextHash)`. Payment releases on
+fulfill. The buyer fetches the ciphertext, decrypts, and verifies recordCommit + medic
+signature off-chain.
 
-**Stack**: People Chain (medic identity) + Asset Hub (contracts + settlement) + IPFS (storage).
-Smart contracts are Solidity compiled to PVM via `resolc` (`pallet-revive`). ZK circuits use
-Circom + Groth16 + snarkjs. Privacy primitives from `@zk-kit` (PSE).
+**Why no on-chain ZK proof**: Phase 5.1 shipped a Groth16 circuit binding all of these
+properties in-circuit, but the BN254 pairing verification on PVM consumed an unworkable
+weight budget from the browser path. Phase 5.2 relaxes atomicity (patient could grief; Phase
+5.3 escrow planned as backstop) and moves verification off-chain. The circuit + Verifier
+remain in the repo as archive — see `docs/product/ZKCP_DESIGN_OPTIONS.md` for the full
+decision record.
+
+**Stack**: Asset Hub (contracts + settlement) + Statement Store (ciphertext bytes). Smart
+contracts are Solidity compiled to PVM via `resolc` (`pallet-revive`). Browser-side
+cryptography from `@zk-kit` (PSE) — `baby-jubjub`, `eddsa-poseidon` — and `poseidon-lite`.
+People Chain identity + Semaphore-based medic anonymity are Phase 6.
 
 Full product design documentation is in `docs/product/`.
 
@@ -25,35 +36,49 @@ Full product design documentation is in `docs/product/`.
 
 | Component | Path | Tech | Status |
 |---|---|---|---|
-| Marketplace contract | `contracts/pvm/contracts/MedicalMarket.sol` | Solidity 0.8.28, resolc, PVM | To build |
-| Semaphore group contract | `contracts/pvm/contracts/SemaphoreGroup.sol` | Solidity, Semaphore v4 | To build |
-| ZK circuits | `circuits/` | Circom, snarkjs, Groth16 | To build |
-| Mixer Box backend | `mixer-box/` | Node.js, Express, polkadot.js | To build |
-| Frontend | `web/` | React 18, Vite, TypeScript, Tailwind, PAPI, snarkjs | To build |
+| Marketplace contract | `contracts/pvm/contracts/MedicalMarket.sol` | Solidity 0.8.28, resolc, PVM | Phase 5.2 |
+| Semaphore group contract | `contracts/pvm/contracts/SemaphoreGroup.sol` | Solidity, Semaphore v4 | Phase 6 |
+| ZK circuits (archive) | `circuits/`, `contracts/pvm/contracts/Verifier.sol` | Circom, snarkjs, Groth16 | Archived in Phase 5.2 — kept as reference for future ZKCP rebuild |
+| Mixer Box backend | `mixer-box/` | Node.js, Express, polkadot.js | Phase 6 |
+| Frontend | `web/` | React 18, Vite, TypeScript, Tailwind, PAPI | Phase 5.2 |
 | PVM contract scaffold | `contracts/pvm/` | Solidity 0.8.28, Hardhat, resolc | Existing (PoE example) |
 | Parachain runtime | `blockchain/runtime/` | Rust, Cumulus, pallet-revive | Existing |
 | Scripts | `scripts/` | Bash | Existing |
 
 ---
 
-## How the Layers Connect
+## How the Layers Connect (Phase 5.2)
 
-- **People Chain**: Medics register professional identity via the Identity Pallet. The Central
-  Authority acts as an on-chain Registrar issuing `KnownGood` judgements.
-- **Mixer Box**: Off-chain Node.js service. Verifies People Chain `KnownGood` status, then calls
-  `addMember(commitment)` on the Semaphore group contract on Asset Hub — from the Authority
-  admin account, not the medic's wallet. This is the privacy bridge.
-- **Semaphore group contract**: Holds anonymous medic identity commitments on Asset Hub.
-  `verifyProof()` confirms a verified medic signed a document without revealing which one.
-- **MedicalMarket contract**: `createListing()` stores Merkle root + IPFS CID. `placeBuyOrder()`
-  locks USDT/USDC and registers buyer's BabyJubJub public key. `fulfill()` verifies the Groth16
-  proof and atomically releases payment + emits buyer-specific ciphertext.
-- **ZK circuit**: One Groth16 circuit proving: EdDSA signature over Merkle root is valid,
-  disclosed fields are Merkle leaves, signer is in Verified Medics Semaphore group, ciphertext
-  is ECDH-encrypted for the buyer's public key.
-- **Frontend**: PAPI for chain reads, snarkjs for browser-side proof generation, polkadot.js
-  extension for wallet signing.
-- **IPFS**: Encrypted record blobs stored off-chain. Hash + CID anchored in contract state.
+- **MedicalMarket contract**: `createListing(recordCommit, medicPk, sig, title, price)` stores
+  the Poseidon-hash commitment of the medic-signed record plus the medic's BabyJubJub pubkey
+  and EdDSA-Poseidon signature. `placeBuyOrder()` locks native PAS and registers the buyer's
+  BabyJubJub pubkey for ECDH. `fulfill(orderId, ephPk, ciphertextHash)` is a pure escrow +
+  signal — no on-chain proof — releases payment and stores the ephemeral pubkey + Statement
+  Store lookup hash.
+- **Off-chain encryption**: the patient encrypts the plaintext for the buyer using BabyJubJub
+  ECDH + a Poseidon stream cipher (one-time pad keyed by `Poseidon(sharedX, sharedY, nonce, i)`),
+  in the browser. The ciphertext bytes go to the Statement Store; only the Poseidon hash of the
+  ciphertext lands on-chain.
+- **Off-chain verification (buyer)**: after fetching from the Statement Store and decrypting
+  with their stored skBuyer + ephPk via ECDH, the researcher recomputes
+  `HashChain32(plaintext) == listing.recordCommit` and verifies the medic's EdDSA-Poseidon
+  signature over `recordCommit` using the listing's published `medicPk`. Both checks render
+  as ✓/✗ chips in the decrypt panel.
+- **Frontend**: PAPI for chain extrinsics (Revive.call, Statement Store), viem for read-only
+  EVM calls via the eth-rpc adapter. Browser-side cryptography uses `poseidon-lite`,
+  `@zk-kit/baby-jubjub`, and `@zk-kit/eddsa-poseidon`.
+- **Statement Store**: ephemeral signed storage for the encrypted ciphertext (~32 × 32 bytes).
+  Lookup key is the Poseidon hash of the ciphertext (`ciphertextHash` in the on-chain
+  Fulfillment).
+- **Phase 5.1 ZK stack (archived, not in runtime)**: `circuits/medical_disclosure.circom` and
+  `contracts/pvm/contracts/Verifier.sol` remain in the repo as a working Option-1 ZKCP
+  reference. Dropped from runtime because the on-chain BN254 pairing verification on PVM
+  exceeded a workable weight budget. See `docs/product/ZKCP_DESIGN_OPTIONS.md` "Phase 5.2 —
+  Decision to drop the on-chain circuit" for the full record.
+- **Phase 5.3 (planned)**: escrow / acknowledge / reclaim window so a buyer who detects a
+  recordCommit mismatch on decrypt can recover their payment.
+- **Phase 6 (planned)**: Semaphore-based medic anonymity. People Chain identity → Mixer Box →
+  on-chain anonymous commitments. Not in 5.2.
 
 ---
 

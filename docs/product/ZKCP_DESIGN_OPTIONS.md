@@ -364,3 +364,176 @@ full phase of its own, not a patch.
 - Circuit: `circuits/medical_disclosure.circom`.
 - Statement Store helpers: `web/src/hooks/useStatementStore.ts` (upload + fetch).
 - Bulletin upload helper (alternative): `web/src/hooks/useBulletin.ts`.
+
+---
+
+# Phase 5.2 — Decision to drop the on-chain circuit (relaxed atomicity)
+
+> **Status:** decided 2026-04-19. Branch `phase5.2b`. Supersedes the on-chain
+> Groth16 verification step from Phase 5.1.
+>
+> **Note for future readers:** the Phase 5.1 circuit + Verifier + ptau + zkey
+> + proof fixture are intentionally **kept in the repo as archive** (under
+> `circuits/`, `web/public/circuits/`, `contracts/pvm/contracts/Verifier.sol`,
+> `contracts/pvm/test/fixtures/phase5_1_proof.json`). Nothing in the runtime
+> imports them, but they remain as the working reference for any future ZKCP
+> rebuild.
+
+## What Phase 5.1 actually shipped
+
+The Phase 5.1 Groth16 circuit (~47k constraints, ptau 2^16) bound four
+properties in-circuit, exposed via 9 public signals:
+
+1. `EdDSAPoseidonVerifier((medicPkX, medicPkY), (R8, S), recordCommit)` — the
+   medic signed `recordCommit`.
+2. `recordCommit == HashChain32(plaintext[32])` — the prover knows the
+   plaintext that hashes to the commit.
+3. `BabyPbk(ephemeralSk) == (ephPkX, ephPkY)` and
+   `Ecdh(ephemeralSk, (pkBuyerX, pkBuyerY)) → shared` — a fresh ephemeral
+   keypair was derived correctly and an ECDH shared secret was computed for
+   the buyer's BabyJubJub pubkey.
+4. For each of 32 slots: `c[i] == plaintext[i] + Poseidon(4)(sharedX, sharedY,
+   nonce, i)` — the ciphertext is a Poseidon stream-cipher encryption of the
+   plaintext under the ECDH-derived key, with `ciphertextHash =
+   HashChain32(c[0..31])` exposed as `pubSignals[7]`.
+
+`MedicalMarket.fulfill()` called a hand-rolled BN254 `Verifier.sol` to verify
+the proof on PVM, asserted `pubSignals[0] == listing.recordCommit`,
+`pubSignals[3..4] == order.pkBuyer`, `pubSignals[8] == orderId`, then stored
+`(ephPk, ciphertextHash)` and released payment.
+
+## What broke during local end-to-end testing
+
+The verify path failed reliably from the browser:
+
+- A direct `viem.writeContract` against the eth-rpc adapter SUCCEEDED — the
+  proof is valid, the contract logic is correct.
+- The browser path through PAPI `Revive.call` reverted with
+  `ContractReverted` and **no debug message** surfaced by the pallet.
+- `weight_limit` tuning sequence:
+  - `3e9` ref_time → `ContractReverted` (out-of-gas).
+  - `100e9` ref_time → `ExhaustsResources` (over per-extrinsic block budget).
+  - `30e9` ref_time → `ContractReverted` (still OOG inside verify).
+- Verifying the proof on PVM eats enormous `ref_time` (BN254 pairing in a
+  pure-Solidity verifier with no native precompile assist on PVM). The
+  window between "too low → contract OOG" and "too high → block budget"
+  is tight and fragile.
+- Each iteration cost ptau juggling, fixture regen, eth_call simulate
+  instrumentation. The cost of debugging exceeded what the in-circuit
+  binding actually buys us.
+
+## Honest re-evaluation of what the circuit preserves
+
+Walking through the four properties above:
+
+- **#3 + #4 (in-circuit ciphertext binding to buyer pk)** is the only
+  property that Solidity OR off-chain verification cannot replicate
+  cheaply. We had already agreed to drop it (relaxed atomicity, with
+  Phase 5.3 escrow planned as the fraud backstop).
+- Once #3 + #4 are gone, properties #1 (medic sig) and #2 (preimage
+  knowledge) become **busywork**: the buyer verifies the medic signature
+  and recomputes `HashChain32(plaintext) == recordCommit` off-chain
+  after decrypting anyway. Putting them in a circuit is compute, not
+  security.
+- The "ZKCP" framing weakens, but the user-visible value — "encrypted-
+  data marketplace where the buyer cryptographically verifies the data
+  they paid for" — survives intact.
+
+## Decision
+
+Remove the Groth16 stack from the active runtime. Encryption stays
+(off-circuit ECDH + Poseidon stream cipher, **same construction** as
+the in-circuit one — just runs in the browser). The medic public key +
+EdDSA signature publish with the listing so any researcher can
+pre-verify the medic before paying. The buyer verifies signature and
+`recordCommit` off-chain after decryption.
+
+### What is preserved
+
+- **Plaintext privacy**: the record never appears on-chain or in any
+  off-chain store except the buyer-pk-encrypted ciphertext.
+- **Buyer-only decryption**: ECDH on BabyJubJub guarantees only the
+  holder of `skBuyer` can derive the Poseidon stream-cipher key.
+- **Medic accountability**: the EdDSA-Poseidon signature over
+  `recordCommit` is publicly verifiable from the listing — researchers
+  can filter "show me listings signed by medics whose public key I
+  trust" before paying.
+- **Tamper detection**: the buyer recomputes `HashChain32(plaintext)`
+  after decryption and compares against `listing.recordCommit`. Any
+  divergence (wrong bytes, swapped bytes, garbage) is detected
+  immediately.
+
+### What is lost (and why we accept the loss)
+
+- **Atomicity between payment and correct-data delivery**. A dishonest
+  patient could upload garbage to the Statement Store, then call
+  `fulfill()`. Payment is released; the buyer detects the fraud on
+  decrypt but cannot recover the funds in the same transaction. This
+  is the gap Phase 5.3 (escrow / acknowledge / reclaim) is designed
+  to close.
+- **The "atomic ZKCP" framing on-chain.** The contract is now an
+  encrypted-data marketplace with off-chain verification, not a
+  zero-knowledge contingent payment.
+
+## Concrete shape changes
+
+### Contract — `MedicalMarket.sol`
+
+- `Listing` struct grows: `recordCommit` + `medicPkX, medicPkY, sigR8x,
+  sigR8y, sigS` + the existing title/price/patient/active fields.
+- `createListing(recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS,
+  title, price)`.
+- `fulfill(orderId, ephPkX, ephPkY, ciphertextHash)` — no proof params,
+  no Verifier call. Caller must be the patient; order must be pending.
+- `IVerifier` interface and `verifier` constructor arg removed.
+- `Verifier.sol` removed from active deployment but **kept in source**
+  as archive (still compiles cleanly).
+
+### Frontend
+
+- `web/src/utils/zk.ts`: drop `snarkjs` import, `WASM_URL`/`ZKEY_URL`
+  constants, `SolidityProof` type, `generateProofFromRecord`. Add
+  synchronous `encryptRecordForBuyer({plaintext, pkBuyer, nonce}) →
+  {ephPk, ciphertextBytes, ciphertextHash}`. All other helpers
+  (encode/decode, hashChain32, randomScalar, ECDH decrypt) are reused
+  unchanged.
+- `PatientDashboard.tsx`: createListing form pulls medicPk + sig from
+  the signed package; fulfill flow becomes
+  `encryptRecordForBuyer → submitStatement → fulfill(orderId, ephPk.x,
+  ephPk.y, ciphertextHash)`. All proof generation, eth_call simulation,
+  weight_limit tuning, and `[fulfill]` debug instrumentation removed.
+- `ResearcherBuy.tsx`: decrypt panel adds two off-chain checks after
+  `decryptRecord`:
+  1. `computeRecordCommit(encodeRecordToFieldElements(decrypted))` must
+     equal `listing.recordCommit`.
+  2. `verifySignature(listing.recordCommit, {R8, S}, [medicPkX, medicPkY])`
+     from `@zk-kit/eddsa-poseidon` must return true.
+  Both results render as ✓/✗ chips next to the decrypted fields.
+
+### Tests
+
+- Hardhat `MedicalMarket.test.ts` rewritten without the proof fixture.
+  The full encrypt → fulfill → researcher-decrypt round-trip is
+  simulated using `poseidon-lite` + `@zk-kit/baby-jubjub` directly
+  (the same code paths the browser uses).
+- The Phase 5.1 proof fixture file is kept in the repo as archive.
+
+## Path back to a real ZKCP
+
+If/when in-circuit binding is reintroduced, we should target
+**Option 3** (three-hashes detection-only) from the comparison table
+above rather than the heavy in-circuit ECDH+stream-cipher of Option 1.
+Option 3 keeps the verifier dramatically smaller (no per-element
+Poseidon pads), preserves the binding properties we care about, and
+fits the PVM weight budget without contortions. The Phase 5.1 archive
+in this repo contains a working Option-1 implementation that can be
+referenced or extracted if needed.
+
+## Decision record (Phase 5.2)
+
+- **2026-04-19**: Drop the on-chain Groth16 verification entirely after
+  the PVM weight-budget pain made the verify path unreliable from the
+  browser. Encryption stays off-circuit; medic signature verification
+  moves off-chain into the buyer's decrypt panel. Phase 5.3 escrow
+  becomes the planned recourse for patient fraud. Phase 5.1 artifacts
+  retained as archive.
