@@ -12,7 +12,7 @@ import { getStackTemplateDescriptor } from "../hooks/useConnection";
 import { useChainStore } from "../store/chainStore";
 import { formatDispatchError } from "../utils/format";
 import FileDropZone from "../components/FileDropZone";
-import { type MerklePackage } from "../utils/zk";
+import { type MerklePackage, aesKeyToCommit, generateProofWithEncryption } from "../utils/zk";
 
 // Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
 const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
@@ -260,9 +260,17 @@ export default function PatientDashboard() {
 					abi: medicalMarketAbi,
 					functionName: "getListing",
 					args: [i],
-				})) as readonly [`0x${string}`, `0x${string}`, string, bigint, string, boolean];
+				})) as readonly [
+					`0x${string}`,
+					`0x${string}`,
+					bigint,
+					string,
+					bigint,
+					`0x${string}`,
+					boolean,
+				];
 
-				const [merkleRoot, , title, price, patient, active] = rawTuple;
+				const [merkleRoot, , , title, price, patient, active] = rawTuple;
 
 				if (patient.toLowerCase() !== currentAccount.evmAddress.toLowerCase()) continue;
 
@@ -327,9 +335,12 @@ export default function PatientDashboard() {
 
 			setTxStatus("Creating listing on-chain...");
 			const priceWei = parseEther(priceStr);
+			const aesKeyBytes = hexToBytes(keyHex);
+			const aesKeyCommit = aesKeyToCommit(aesKeyBytes);
 			const { txHash } = await reviveCall("createListing", [
 				importedPackage.merkleRoot as `0x${string}`,
 				ciphertextHash,
+				aesKeyCommit,
 				titleStr.trim(),
 				priceWei,
 			]);
@@ -369,7 +380,7 @@ export default function PatientDashboard() {
 			const keyHex = localStorage.getItem(`aes-key:${ethRpcUrl}:${listingId}`);
 			if (!keyHex) {
 				setTxStatus(
-					`Error: No decryption key for listing #${listingId}. Was it created in another session?`,
+					`Error: No AES key in this browser for listing #${listingId}. The key was generated when the listing was created — if it was another session/browser, the listing can't be fulfilled from here.`,
 				);
 				return;
 			}
@@ -387,14 +398,29 @@ export default function PatientDashboard() {
 				return;
 			}
 
-			setTxStatus("Generating ZK proof… (10–30s, browser may pause briefly)");
-			const { generateProofForField } = await import("../utils/zk");
-			const zkProof = await generateProofForField(pkg, selectedField);
+			// Read buyer's BabyJubJub pk (committed at placeBuyOrder time)
+			const publicClient = getPublicClient(ethRpcUrl);
+			const orderTuple = (await publicClient.readContract({
+				address: contractAddress as Address,
+				abi: medicalMarketAbi,
+				functionName: "getOrder",
+				args: [orderId],
+			})) as readonly [bigint, `0x${string}`, bigint, boolean, boolean, bigint, bigint];
+			const pkBuyer = { x: orderTuple[5], y: orderTuple[6] };
 
-			setTxStatus("Submitting proof and decryption key on-chain...");
+			setTxStatus("Generating ZK proof… (10–30s, browser may pause briefly)");
+			const aesKeyBytes = hexToBytes(keyHex);
+			const zkProof = await generateProofWithEncryption(
+				pkg,
+				selectedField,
+				aesKeyBytes,
+				pkBuyer,
+				orderId,
+			);
+
+			setTxStatus("Submitting proof on-chain (atomic release)...");
 			const { txHash } = await reviveCall("fulfill", [
 				orderId,
-				keyHex as `0x${string}`,
 				zkProof.a,
 				zkProof.b,
 				zkProof.c,
@@ -437,8 +463,9 @@ export default function PatientDashboard() {
 			<div className="space-y-2">
 				<h1 className="page-title text-polka-500">Patient Dashboard</h1>
 				<p className="text-text-secondary">
-					Encrypt and list medical records for sale. The buyer receives the decryption key
-					only after you confirm the sale — releasing their payment to you.
+					Encrypt and list medical records for sale. The buyer gets the record only by
+					submitting a ZK proof that atomically encrypts the AES key to their public key
+					and releases payment — no trust required between parties.
 				</p>
 			</div>
 
@@ -489,8 +516,9 @@ export default function PatientDashboard() {
 				<p className="text-text-muted text-xs">
 					Drop a medic-signed record (downloaded from the Medic Signing Tool). The signed
 					package is encrypted with AES-256-GCM in your browser and uploaded to the
-					Statement Store. The Merkle root is committed on-chain — the decryption key is
-					released only when you confirm the sale.
+					Statement Store. The Merkle root + AES-key commitment are stored on-chain. At
+					fulfillment, a ZK proof re-encrypts the AES key for the buyer and releases
+					payment atomically.
 				</p>
 
 				<FileDropZone
@@ -643,7 +671,7 @@ export default function PatientDashboard() {
 										| Listing #{listing.id.toString()}
 										{!hasKey && listing.active && hasPendingOrder && (
 											<span className="ml-2 text-accent-red text-xs">
-												(key not found in this browser)
+												(AES key not saved in this browser — can't fulfill)
 											</span>
 										)}
 									</p>
@@ -678,7 +706,8 @@ export default function PatientDashboard() {
 														"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 												}}
 											>
-												Submit Key (Order #{orderIdForFulfill.toString()})
+												Fulfill with ZK Proof (Order #
+												{orderIdForFulfill.toString()})
 											</button>
 										</div>
 									)}

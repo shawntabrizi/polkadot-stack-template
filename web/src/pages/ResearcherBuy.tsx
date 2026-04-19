@@ -10,6 +10,7 @@ import { getClient } from "../hooks/useChain";
 import { getStackTemplateDescriptor } from "../hooks/useConnection";
 import { useChainStore } from "../store/chainStore";
 import { formatDispatchError } from "../utils/format";
+import { decryptCiphertext, getOrCreateBuyerKey } from "../utils/zk";
 
 // Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
 const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
@@ -185,8 +186,16 @@ export default function ResearcherBuy() {
 					abi: medicalMarketAbi,
 					functionName: "getListing",
 					args: [i],
-				})) as [string, string, string, bigint, string, boolean];
-				const [merkleRoot, statementHash, title, price, patient, active] = result;
+				})) as readonly [
+					`0x${string}`,
+					`0x${string}`,
+					bigint,
+					string,
+					bigint,
+					`0x${string}`,
+					boolean,
+				];
+				const [merkleRoot, statementHash, , title, price, patient, active] = result;
 				if (!active) continue;
 				const pendingOrderId = (await client.readContract({
 					address: addr,
@@ -220,7 +229,7 @@ export default function ResearcherBuy() {
 					abi: medicalMarketAbi,
 					functionName: "getOrder",
 					args: [i],
-				})) as [bigint, string, bigint, boolean, boolean];
+				})) as readonly [bigint, `0x${string}`, bigint, boolean, boolean, bigint, bigint];
 				const [listingId, researcher, amount, confirmed, cancelled] = result;
 				if (researcher.toLowerCase() !== currentAccount.evmAddress.toLowerCase()) continue;
 				fetchedOrders.push({
@@ -245,10 +254,14 @@ export default function ResearcherBuy() {
 		if (!contractAddress) return;
 		try {
 			setTxStatus(`Placing buy order for listing #${listing.id}...`);
+			// BabyJubJub keypair for in-circuit ECDH. Persisted per (researcher,listing)
+			// so we can re-derive the shared secret at decrypt time.
+			const skStorageKey = `phase5-sk-buyer:${currentAccount.evmAddress}:${ethRpcUrl}:${listing.id}`;
+			const { pk } = getOrCreateBuyerKey(skStorageKey);
 			const { txHash } = await reviveCall(
 				"placeBuyOrder",
-				[listing.id],
-				listing.price, // price is in EVM wei; reviveCall converts to planck
+				[listing.id, pk.x, pk.y],
+				listing.price,
 			);
 			setTxStatus(`Buy order placed. Tx: ${txHash}`);
 			loadAll();
@@ -285,23 +298,41 @@ export default function ResearcherBuy() {
 				abi: medicalMarketAbi,
 				functionName: "getListing",
 				args: [order.listingId],
-			})) as [string, string, string, bigint, string, boolean];
-			const statementHash = listingResult[1] as string;
+			})) as readonly [
+				`0x${string}`,
+				`0x${string}`,
+				bigint,
+				string,
+				bigint,
+				`0x${string}`,
+				boolean,
+			];
+			const statementHash = listingResult[1];
 
-			setTxStatus("Reading decryption key from contract...");
-			const keyHex = (await client.readContract({
+			setTxStatus("Reading ciphertext from contract...");
+			const fulfillment = (await client.readContract({
 				address: addr,
 				abi: medicalMarketAbi,
-				functionName: "getDecryptionKey",
+				functionName: "getFulfillment",
 				args: [order.id],
-			})) as `0x${string}`;
+			})) as readonly [bigint, bigint, bigint, bigint];
+			const [ephPkX, ephPkY, c0, c1] = fulfillment;
 
-			if (keyHex === "0x0000000000000000000000000000000000000000000000000000000000000000") {
-				setTxStatus(
-					"Error: Decryption key not posted yet. Wait for the patient to submit the key.",
-				);
+			if (ephPkX === 0n && ephPkY === 0n) {
+				setTxStatus("Error: Order not fulfilled yet.");
 				return;
 			}
+
+			setTxStatus("Recovering AES key via ECDH...");
+			const skStorageKey = `phase5-sk-buyer:${currentAccount.evmAddress}:${ethRpcUrl}:${order.listingId}`;
+			const { sk } = getOrCreateBuyerKey(skStorageKey);
+			const aesKeyBytes = decryptCiphertext(
+				{ x: ephPkX, y: ephPkY },
+				c0,
+				c1,
+				sk,
+				order.id, // nonce = orderId
+			);
 
 			setTxStatus("Fetching encrypted data from Statement Store...");
 			const statements = await fetchStatements(wsUrl);
@@ -318,9 +349,8 @@ export default function ResearcherBuy() {
 				return;
 			}
 
-			setTxStatus("Decrypting...");
-			const keyBytes = hexToBytes(keyHex);
-			const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, [
+			setTxStatus("Decrypting record...");
+			const cryptoKey = await crypto.subtle.importKey("raw", aesKeyBytes, "AES-GCM", false, [
 				"decrypt",
 			]);
 			const iv = match.data.slice(0, 12);

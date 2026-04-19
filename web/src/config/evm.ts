@@ -44,7 +44,7 @@ export const proofOfExistenceAbi = [
 	},
 ] as const;
 
-// MedicalMarket contract ABI — Phase 1 listing + escrow + manual key release
+// MedicalMarket contract ABI — Phase 5 atomic ZKCP (in-circuit ECDH + Poseidon cipher)
 export const medicalMarketAbi = [
 	{
 		type: "function",
@@ -52,6 +52,7 @@ export const medicalMarketAbi = [
 		inputs: [
 			{ name: "merkleRoot", type: "bytes32" },
 			{ name: "statementHash", type: "bytes32" },
+			{ name: "aesKeyCommit", type: "uint256" },
 			{ name: "title", type: "string" },
 			{ name: "price", type: "uint256" },
 		],
@@ -61,7 +62,11 @@ export const medicalMarketAbi = [
 	{
 		type: "function",
 		name: "placeBuyOrder",
-		inputs: [{ name: "listingId", type: "uint256" }],
+		inputs: [
+			{ name: "listingId", type: "uint256" },
+			{ name: "pkBuyerX", type: "uint256" },
+			{ name: "pkBuyerY", type: "uint256" },
+		],
 		outputs: [],
 		stateMutability: "payable",
 	},
@@ -70,20 +75,24 @@ export const medicalMarketAbi = [
 		name: "fulfill",
 		inputs: [
 			{ name: "orderId", type: "uint256" },
-			{ name: "decryptionKey", type: "bytes32" },
 			{ name: "a", type: "uint256[2]" },
 			{ name: "b", type: "uint256[2][2]" },
 			{ name: "c", type: "uint256[2]" },
-			{ name: "pubSignals", type: "uint256[3]" },
+			{ name: "pubSignals", type: "uint256[11]" },
 		],
 		outputs: [],
 		stateMutability: "nonpayable",
 	},
 	{
 		type: "function",
-		name: "getDecryptionKey",
+		name: "getFulfillment",
 		inputs: [{ name: "orderId", type: "uint256" }],
-		outputs: [{ name: "", type: "bytes32" }],
+		outputs: [
+			{ name: "ephPkX", type: "uint256" },
+			{ name: "ephPkY", type: "uint256" },
+			{ name: "c0", type: "uint256" },
+			{ name: "c1", type: "uint256" },
+		],
 		stateMutability: "view",
 	},
 	{
@@ -107,6 +116,7 @@ export const medicalMarketAbi = [
 		outputs: [
 			{ name: "merkleRoot", type: "bytes32" },
 			{ name: "statementHash", type: "bytes32" },
+			{ name: "aesKeyCommit", type: "uint256" },
 			{ name: "title", type: "string" },
 			{ name: "price", type: "uint256" },
 			{ name: "patient", type: "address" },
@@ -131,6 +141,8 @@ export const medicalMarketAbi = [
 			{ name: "amount", type: "uint256" },
 			{ name: "confirmed", type: "bool" },
 			{ name: "cancelled", type: "bool" },
+			{ name: "pkBuyerX", type: "uint256" },
+			{ name: "pkBuyerY", type: "uint256" },
 		],
 		stateMutability: "view",
 	},
@@ -156,6 +168,7 @@ export const medicalMarketAbi = [
 			{ name: "listingId", type: "uint256", indexed: true },
 			{ name: "merkleRoot", type: "bytes32", indexed: false },
 			{ name: "statementHash", type: "bytes32", indexed: false },
+			{ name: "aesKeyCommit", type: "uint256", indexed: false },
 			{ name: "title", type: "string", indexed: false },
 			{ name: "price", type: "uint256", indexed: false },
 		],
@@ -168,6 +181,8 @@ export const medicalMarketAbi = [
 			{ name: "orderId", type: "uint256", indexed: true },
 			{ name: "researcher", type: "address", indexed: true },
 			{ name: "amount", type: "uint256", indexed: false },
+			{ name: "pkBuyerX", type: "uint256", indexed: false },
+			{ name: "pkBuyerY", type: "uint256", indexed: false },
 		],
 	},
 	{
@@ -178,7 +193,10 @@ export const medicalMarketAbi = [
 			{ name: "listingId", type: "uint256", indexed: true },
 			{ name: "patient", type: "address", indexed: false },
 			{ name: "researcher", type: "address", indexed: false },
-			{ name: "decryptionKey", type: "bytes32", indexed: false },
+			{ name: "ephPkX", type: "uint256", indexed: false },
+			{ name: "ephPkY", type: "uint256", indexed: false },
+			{ name: "ciphertext0", type: "uint256", indexed: false },
+			{ name: "ciphertext1", type: "uint256", indexed: false },
 		],
 	},
 	{
