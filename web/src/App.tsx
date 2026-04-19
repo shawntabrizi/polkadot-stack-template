@@ -1,6 +1,19 @@
+import { useEffect } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
+import { hostApi } from "@novasamatech/product-sdk";
+import { enumValue } from "@novasamatech/host-api";
 import { useChainStore } from "./store/chainStore";
 import { useConnectionManagement } from "./hooks/useConnection";
+
+function isInHost(): boolean {
+	if (typeof window === "undefined") return false;
+	if ((window as { __HOST_WEBVIEW_MARK__?: boolean }).__HOST_WEBVIEW_MARK__) return true;
+	try {
+		return window !== window.top;
+	} catch {
+		return true;
+	}
+}
 
 export default function App() {
 	const location = useLocation();
@@ -8,6 +21,18 @@ export default function App() {
 	const connected = useChainStore((s) => s.connected);
 
 	useConnectionManagement();
+
+	// Request TransactionSubmit permission upfront from the Polkadot Host.
+	// Without this, every signing operation (statement store createProof +
+	// on-chain Revive.call) is silently rejected with SigningErr::PermissionDenied.
+	// Matches the pattern in host-api-example/apps/web/src/provider.ts.
+	useEffect(() => {
+		if (!isInHost()) return;
+		hostApi.permission(enumValue("v1", { tag: "TransactionSubmit", value: undefined })).match(
+			() => {},
+			(err) => console.warn("[host] TransactionSubmit permission denied:", err),
+		);
+	}, []);
 
 	const navItems = [
 		{ path: "/", label: "Home", enabled: true },
