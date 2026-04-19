@@ -9,6 +9,7 @@ import { getPolkadotSigner } from "polkadot-api/signer";
 import { type PolkadotSigner } from "polkadot-api";
 import { connectInjectedExtension, getInjectedExtensions } from "polkadot-api/pjs-signer";
 import { injectSpektrExtension, SpektrExtensionName } from "@novasamatech/product-sdk";
+import { Keccak256 } from "@polkadot-api/substrate-bindings";
 
 // Dev accounts derived from the well-known dev seed phrase
 const entropy = mnemonicToEntropy(DEV_PHRASE);
@@ -17,11 +18,18 @@ const derive = sr25519CreateDerive(miniSecret);
 
 /**
  * Derive the EVM H160 address from a 32-byte Substrate public key.
- * Uses pallet-revive DefaultAddressMapper: H160 = last 20 bytes of AccountId32.
+ *
+ * Matches pallet-revive's AccountMapper behaviour:
+ *   - If the AccountId32 is already ETH-derived (last 12 bytes are 0xee),
+ *     the H160 is the first 20 bytes.
+ *   - Otherwise (e.g. sr25519 public key), H160 = keccak256(publicKey)[12..32]
+ *     (same derivation pallet-revive uses when calling map_account on an
+ *     sr25519 account — msg.sender inside the contract matches this).
  */
 export function substrateToH160(publicKey: Uint8Array): `0x${string}` {
-	const last20 = publicKey.slice(12);
-	return `0x${Array.from(last20)
+	const isEthDerived = publicKey.length === 32 && publicKey.slice(20).every((b) => b === 0xee);
+	const h160Bytes = isEthDerived ? publicKey.slice(0, 20) : Keccak256(publicKey).slice(-20);
+	return `0x${Array.from(h160Bytes)
 		.map((b) => b.toString(16).padStart(2, "0"))
 		.join("")}` as `0x${string}`;
 }
