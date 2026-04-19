@@ -71,6 +71,21 @@ export async function generateProofForField(
 		ZKEY_URL,
 	);
 
+	// Sanity-check the proof *off-chain* before packing it for Solidity.
+	// If this fails the proof generation is broken (input encoding, wrong
+	// zkey/wasm). If it passes but the on-chain Verifier still rejects, the
+	// bug is PVM-side (precompile semantics, compiled Verifier mismatch).
+	try {
+		// snarkjs types don't expose zKey.exportVerificationKey / groth16.verify
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const s = snarkjs as any;
+		const vkey = await s.zKey.exportVerificationKey(ZKEY_URL);
+		const offchainOk = await s.groth16.verify(vkey, publicSignals, zkProof);
+		console.log("[zk] snarkjs offline verify =", offchainOk, { publicSignals });
+	} catch (verifyErr) {
+		console.warn("[zk] offline verify threw:", verifyErr);
+	}
+
 	const raw = await snarkjs.groth16.exportSolidityCallData(zkProof, publicSignals);
 	const parsed = JSON.parse("[" + raw + "]") as [string[], string[][], string[], string[]];
 
