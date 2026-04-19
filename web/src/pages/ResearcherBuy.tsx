@@ -12,13 +12,12 @@ import { useChainStore } from "../store/chainStore";
 import { formatDispatchError } from "../utils/format";
 import {
 	getOrCreateBuyerKey,
-	deserializeCiphertext,
-	computeCiphertextHash,
 	computeRecordCommit,
 	decryptRecord,
 	encodeRecordToFieldElements,
 } from "../utils/zk";
 import { verifySignature } from "@zk-kit/eddsa-poseidon";
+import { blake2b } from "blakejs";
 
 // Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
 const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
@@ -371,9 +370,10 @@ export default function ResearcherBuy() {
 			}
 
 			setTxStatus("Verifying ciphertext hash...");
-			const ciphertext = deserializeCiphertext(matchedData);
-			const computed = computeCiphertextHash(ciphertext);
-			if (computed !== ciphertextHash) {
+			const computed32 = blake2b(matchedData, undefined, 32);
+			let computedBig = 0n;
+			for (const b of computed32) computedBig = (computedBig << 8n) | BigInt(b);
+			if (computedBig !== ciphertextHash) {
 				setTxStatus("Error: ciphertext integrity failed (Statement Store bytes corrupt)");
 				return;
 			}

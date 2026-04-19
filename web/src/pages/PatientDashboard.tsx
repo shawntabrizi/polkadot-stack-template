@@ -4,7 +4,12 @@ import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
 import { filter, firstValueFrom } from "rxjs";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import { deployments } from "../config/deployments";
-import { submitToStatementStore, checkStatementStoreAvailable } from "../hooks/useStatementStore";
+import {
+	submitStatement,
+	checkStatementStoreAvailable,
+	MARKETPLACE_ACCOUNT_ID,
+} from "../hooks/useStatementStore";
+import { blake2b } from "blakejs";
 import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
 import { getClient } from "../hooks/useChain";
 import { getStackTemplateDescriptor } from "../hooks/useConnection";
@@ -394,19 +399,30 @@ export default function PatientDashboard() {
 
 			// 2. Encrypt off-chain for buyer (ECDH + Poseidon stream cipher).
 			setTxStatus("Encrypting record for buyer…");
-			const { ephPk, ciphertextBytes, ciphertextHash } = encryptRecordForBuyer({
+			const { ephPk, ciphertextBytes } = encryptRecordForBuyer({
 				plaintext: pkg.plaintext.map(BigInt),
 				pkBuyer,
 				nonce: orderId,
 			});
 
+			// Use blake2b(ciphertextBytes, 32) as the on-chain ciphertextHash so
+			// it doubles as the Statement Store lookup key (the SDK keys its
+			// cache by blake2b of the data payload). The hash also serves as
+			// the on-chain commitment to the bytes uploaded off-chain.
+			const ciphertextHash32 = blake2b(ciphertextBytes, undefined, 32);
+			let ciphertextHashBig = 0n;
+			for (const b of ciphertextHash32)
+				ciphertextHashBig = (ciphertextHashBig << 8n) | BigInt(b);
+
 			// 3. Upload ciphertext to Statement Store. Abort if rejected — the
 			//    buyer can't decrypt without it, so we don't release payment.
 			setTxStatus("Uploading ciphertext to Statement Store…");
 			const stmtSigner = currentAccount.localSigner ?? currentAccount.signer;
-			await submitToStatementStore(
+			await submitStatement(
 				wsUrl,
 				ciphertextBytes,
+				ciphertextHash32,
+				MARKETPLACE_ACCOUNT_ID,
 				stmtSigner.publicKey,
 				stmtSigner.signBytes,
 			);
@@ -418,7 +434,7 @@ export default function PatientDashboard() {
 				orderId,
 				ephPk.x,
 				ephPk.y,
-				ciphertextHash,
+				ciphertextHashBig,
 			]);
 			setTxStatus(`Done. Tx: ${txHash}`);
 			loadListings();
