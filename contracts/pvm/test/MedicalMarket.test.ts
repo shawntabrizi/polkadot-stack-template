@@ -31,7 +31,7 @@ const proofC = fixture.c.map(BigInt) as [bigint, bigint];
 type PubSignals = [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
 const pubSignals = fixture.pubSignals.map(BigInt) as PubSignals;
 
-describe("MedicalMarket Phase 5.1 (ZKCP + Bulletin)", function () {
+describe("MedicalMarket Phase 5.1 (ZKCP + Statement Store)", function () {
 	const title = "Blood Panel Q1 2025";
 	const price = 1_000_000n;
 	const recordCommit = BigInt(fixture.recordCommit);
