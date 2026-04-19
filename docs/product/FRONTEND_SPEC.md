@@ -43,16 +43,19 @@ From `web/src/App.tsx` and `web/src/pages/HomePage.tsx`. Do not introduce new de
 
 ## Navigation Changes (`App.tsx`)
 
-Replace existing nav items with:
+Nav follows **demand order** — Researcher first (listings are the pitch), then Patient, then
+Medic. `Accounts` is dev-only, hidden from the production build.
 
 ```tsx
 const navItems = [
   { path: "/",          label: "Home",       enabled: true },
+  { path: "/researcher",label: "Researcher", enabled: true },
   { path: "/patient",   label: "Patient",    enabled: true },
   { path: "/medic",     label: "Medic",      enabled: true },
-  { path: "/researcher",label: "Researcher", enabled: true },
-  { path: "/accounts",  label: "Accounts",   enabled: true },
 ];
+
+// Dev-only — append when `import.meta.env.DEV` is true or the URL contains `?dev=1`.
+//   { path: "/accounts", label: "Accounts", enabled: true },
 ```
 
 Keep the existing connection indicator (green dot + "Connected" text) in the nav.
@@ -61,12 +64,44 @@ Keep the existing connection indicator (green dot + "Connected" text) in the nav
 
 ## Home Page Changes (`HomePage.tsx`)
 
-Replace the three FeatureCards with:
+### Hero
+
+Lead with the user benefit, not the tech stack. Follow with a primary CTA that routes to the
+Researcher page (demand-first pitch).
+
+```tsx
+<h1 className="page-title">
+  Sell verified medical records.{" "}
+  <span className="bg-gradient-to-r from-polka-400 to-polka-600 bg-clip-text text-transparent">
+    Keep your identity private.
+  </span>
+</h1>
+<p className="text-text-secondary text-base leading-relaxed max-w-2xl">
+  A decentralized marketplace where patients exchange attested health data for payment,
+  without revealing identity or raw records. Powered by zero-knowledge proofs on Polkadot.
+</p>
+<div className="flex gap-3 pt-2">
+  <Link to="/researcher" className="btn-primary">Browse listings</Link>
+  <Link to="/patient"    className="btn-secondary">I have a record to sell</Link>
+</div>
+```
+
+### Feature cards
+
+Order matches the nav (demand order): Researcher, Patient, Medic.
 
 ```tsx
 <FeatureCard
+  title="Researcher"
+  description="Browse verified listings, place buy offers, and decrypt purchased clinical data."
+  link="/researcher"
+  accentColor="text-accent-green"
+  borderColor="hover:border-accent-green/20"
+  available={true}
+/>
+<FeatureCard
   title="Patient"
-  description="Upload attested health records, set disclosure rules, manage listings, track earnings."
+  description="Publish attested health records, set disclosure rules, manage listings, track earnings."
   link="/patient"
   accentColor="text-accent-blue"
   borderColor="hover:border-accent-blue/20"
@@ -74,23 +109,61 @@ Replace the three FeatureCards with:
 />
 <FeatureCard
   title="Medic"
-  description="Sign patient records with your professional key. Construct Merkle trees and generate EdDSA signatures."
+  description="Sign patient records with your professional key so they can be sold on the marketplace."
   link="/medic"
   accentColor="text-accent-purple"
   borderColor="hover:border-accent-purple/20"
   available={true}
 />
-<FeatureCard
-  title="Researcher"
-  description="Browse verified listings, place buy orders, and decrypt purchased clinical data."
-  link="/researcher"
-  accentColor="text-accent-green"
-  borderColor="hover:border-accent-green/20"
-  available={true}
-/>
 ```
 
-Update the hero subtitle to describe the marketplace, not PoE.
+---
+
+## Shared Patterns (apply across all pages)
+
+### Transaction explorer links
+
+Any table row that represents an on-chain event (listing, order, sale) renders a small
+`↗ tx` link as the last column, targeting the block explorer for the connected chain.
+
+```tsx
+<a
+  href={explorerTxUrl(txHash)}
+  target="_blank"
+  rel="noopener noreferrer"
+  className="text-xs text-text-tertiary hover:text-polka-400 transition-colors"
+>
+  ↗ tx
+</a>
+```
+
+Build the URL via a small helper in `web/src/config/network.ts`
+(e.g. `https://blockscout-asset-hub.parity-testnet.parity.io/tx/{hash}` for Paseo,
+local node → no link). No in-app explorer page — the link is enough.
+
+### Empty states
+
+Every table or listing grid has a one-line empty state with the next action. Use
+`text-text-muted text-sm` centered inside the empty card.
+
+| Surface | Empty copy |
+|---|---|
+| Patient → My Records | "No records yet. Ask your clinician to sign one at /medic, then publish it here." |
+| Patient → Records Sold | "No sales yet. Your active listings will show buyers here once fulfilled." |
+| Researcher → Listings grid | "No listings match your filters. Try widening the condition or price range." |
+| Researcher → My Orders | "No buy offers yet. Pick a listing above to get started." |
+| Medic → (no data-bearing tables) | — |
+
+### Mobile behavior
+
+Tables do not fit on phones. Below the `md` breakpoint, replace each table with a
+vertical stack of cards — one per row, label + value pairs stacked, action buttons
+full-width at the bottom. The listings grid collapses from 2 columns to 1.
+
+### Dev-only routes
+
+`/accounts`, `/statements`, `/pallet`, `/evm`, `/pvm` remain in the codebase but are
+hidden from nav in production. Route gate: `import.meta.env.DEV || urlParams.has("dev")`.
 
 ---
 
@@ -103,15 +176,20 @@ File: `web/src/pages/PatientDashboard.tsx`
 page-title: "Patient Dashboard"
 subtitle: "Manage your health records and marketplace listings."
 
+[Help block]        ← shown only when the patient has zero records:
+                     "Don't have a signed record yet? Ask your clinician to
+                      visit /medic to sign one for you."
+
 [Wallet bar]        ← address + USDC balance + DOT balance
 
 [Stats row]         ← 3 stat cards: Total Records | Active Listings | Total Earned (USDC)
 
-[My Records]        ← section heading + "List New Record" button (right-aligned)
+[My Records]        ← section heading + "Publish Record" button (right-aligned)
   [Records table]
 
-[Purchase History]  ← section heading
-  [History table]
+[Records Sold]      ← section heading (was "Purchase History" — renamed because
+                     from the patient's POV these are sales, not purchases)
+  [Sales table]
 ```
 
 ### Wallet bar
@@ -138,7 +216,7 @@ subtitle: "Manage your health records and marketplace listings."
 ```
 
 ### My Records table
-Columns: `Record ID` | `Condition` | `Attested` | `Disclosed Fields` | `Price (USDC)` | `Status` | `Actions`
+Columns: `Record ID` | `Condition` | `Attested` | `Disclosed Fields` | `Price (USDC)` | `Status` | `Actions` | `Tx`
 
 - **Record ID**: truncated hash, monospace
 - **Condition**: plain text tag (e.g. "Type 2 Diabetes")
@@ -150,8 +228,10 @@ Columns: `Record ID` | `Condition` | `Attested` | `Disclosed Fields` | `Price (U
   - `Fulfilled` → `bg-accent-blue/10 text-accent-blue border border-accent-blue/20`
   - `Delisted` → `bg-white/5 text-text-muted border border-white/10`
 - **Actions**: "View" button (opens drawer) + "Delist" button (only if Active)
+- **Tx**: `↗ tx` link to the block explorer for the `createListing` transaction
+  (see Shared Patterns → Transaction explorer links)
 
-### "List New Record" modal
+### "Publish Record" modal
 Opens on button click. Two steps:
 
 **Step 1 — Upload**
@@ -174,21 +254,26 @@ Section: "Price"
 
 Section: "Storage"
   Radio: ○ Statement Store (fast, ephemeral)  ● IPFS (persistent)
+  Help tooltip next to the label, showing on hover:
+    "Statement Store keeps data on-chain for a limited time — cheaper and faster,
+     but blobs may be pruned after a few days. IPFS keeps data off-chain
+     indefinitely as long as at least one peer pins it."
 
-[← Back]  [List Record]
+[← Back]  [Publish Record]
 ```
 
-### Purchase History table
-Columns: `Buyer Key` | `Record` | `Amount (USDC)` | `Date`
+### Records Sold table
+Columns: `Buyer Key` | `Record` | `Amount (USDC)` | `Date` | `Tx`
 
 - **Buyer Key**: truncated `pk_buyer` hex, monospace, copy-on-click
 - **Record**: condition tag
 - **Amount**: green text
 - **Date**: relative ("2 days ago")
+- **Tx**: `↗ tx` link to the `fulfill` transaction on the block explorer
 
 ---
 
-## Page 2: Medic Signing Tool (`/medic`)
+## Page 2: Sign Records (`/medic`)
 
 File: `web/src/pages/MedicSign.tsx`
 
@@ -196,12 +281,12 @@ Single-purpose page. Three sequential steps shown as a vertical stepper.
 
 ### Layout
 ```
-page-title: "Medic Signing Tool"
-subtitle: "Sign patient records with your professional key."
+page-title: "Sign Records"
+subtitle: "Attest patient records with your professional key so they can be sold."
 
 [Stepper]
   Step 1: Upload Record       ← always visible
-  Step 2: Merkle Tree         ← revealed after Step 1 complete
+  Step 2: Prepare Record      ← revealed after Step 1 complete
   Step 3: Sign & Export       ← revealed after Step 2 complete
 ```
 
@@ -231,12 +316,20 @@ subtitle: "Sign patient records with your professional key."
 </div>
 ```
 
-### Step 2 — Construct Merkle Tree
+### Step 2 — Prepare Record
+
+Header label is user-facing; body copy can still reference Merkle / Poseidon for the
+technically curious.
+
 ```tsx
 <div className="card space-y-4">
-  <StepHeader number={2} title="Construct Merkle Tree" active={step === 2} done={step > 2} />
+  <StepHeader number={2} title="Prepare Record" active={step === 2} done={step > 2} />
+  <p className="text-sm text-text-secondary">
+    Hash each field into a Poseidon Merkle tree. The root is what you sign —
+    not the raw data.
+  </p>
   <button className="btn-secondary" onClick={buildTree} disabled={building}>
-    {building ? "Building..." : "Build Poseidon Merkle Tree"}
+    {building ? "Building..." : "Build Merkle Tree"}
   </button>
   {/* Once built: */}
   <div className="space-y-2">
@@ -353,45 +446,66 @@ subtitle: "Browse verified medical data listings."
       {price} <span className="text-sm text-text-muted font-normal">USDC</span>
     </span>
     <button className="btn-primary text-sm" onClick={() => openBuyModal(listing)}>
-      Place Buy Order
+      Place Buy Offer
     </button>
   </div>
 </div>
 ```
 
-### "Place Buy Order" modal
+Copy note: **"offer" rather than "buy"** — funds lock in escrow and the seller (patient)
+must still fulfill with a ZK proof. Nothing is automatic.
+
+### "Place Buy Offer" modal
 ```
 [Listing summary — condition, fields, price]
 
+[Info banner]
+  "This places an offer. Your funds lock in escrow until the seller fulfills
+   with a zero-knowledge proof. You can cancel and reclaim funds any time
+   before fulfillment."
+
 Section: "Your Encryption Key"
-  Radio: ○ Generate new BabyJubJub keypair   ● Paste existing public key
+  Radio: ● Generate new BabyJubJub keypair   ○ Paste existing public key
 
   If generate:
     [Generate Key] button
-    Public key output field (copyable)
-    Warning: "Save your private key — you need it to decrypt the data."
-    Private key output field (copyable, blurred by default, click to reveal)
+    Public key output field  (copyable)
+    Private key output field (blurred by default, click to reveal, copyable)
+
+    [⚠ Danger card]
+      "If you lose this private key, the data you purchase is unrecoverable.
+       No one — not the patient, not the protocol — can decrypt it for you."
+
+    [↓ Download keypair backup (.json)] button  ← must be clicked before the
+                                                  submit button enables
 
   If paste:
     input-field for public key
 
 Section: "Escrow"
-  "You will lock [price] USDC until the seller fulfills."
+  "You will lock [price] USDC in escrow until the seller fulfills."
 
-[Cancel]  [Lock Funds & Place Order]
+[Cancel]  [Submit Offer & Lock Funds]   ← disabled until keypair backup downloaded
+                                          (or an existing public key is pasted)
 ```
 
+The submit button's disabled state has a tooltip: "Download your keypair backup first."
+
 ### My Orders table
-Columns: `Order ID` | `Condition` | `Price (USDC)` | `Status` | `Date` | `Actions`
+Columns: `Order ID` | `Condition` | `Price (USDC)` | `Status` | `Date` | `Actions` | `Tx`
 
 Status badges:
 - `Pending` → yellow
 - `Fulfilled` → green
-- `Expired` → muted
+- `Cancelled` → muted
 
 Actions:
-- Pending: "Cancel" (ghost button)
+- Pending: "Cancel" (ghost button — refunds escrowed USDC)
 - Fulfilled: "Decrypt & Download" (primary button)
+- Cancelled: — (no actions)
+
+`Tx` column links to the most recent on-chain event for the order (`placeBuyOrder`,
+`fulfill`, or `cancelOrder` depending on status).
 
 ### "Decrypt & Download" drawer
 Slides in from right when clicking fulfilled order.
