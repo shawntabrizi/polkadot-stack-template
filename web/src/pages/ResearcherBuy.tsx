@@ -110,16 +110,6 @@ export default function ResearcherBuy() {
 		setContractAddress(stored ?? defaultAddress ?? "");
 	}, [storageKey, defaultAddress]);
 
-	useEffect(() => {
-		if (contractAddress) {
-			loadAll();
-		} else {
-			setListings([]);
-			setOrders([]);
-			setTxStatus(null);
-		}
-	}, [contractAddress, ethRpcUrl]); // eslint-disable-line react-hooks/exhaustive-deps
-
 	function saveAddress(address: string) {
 		setContractAddress(address);
 		if (address) {
@@ -298,6 +288,23 @@ export default function ResearcherBuy() {
 			setLoading(false);
 		}
 	}, [contractAddress, ethRpcUrl, currentAccount.evmAddress]);
+
+	// Fetch listings + orders when contract address, RPC, or the connected
+	// account changes. Previously this effect only depended on [contractAddress,
+	// ethRpcUrl] and suppressed the ESLint warning — which meant the initial
+	// fetch used the `devAccounts` fallback's evmAddress (Alice). After async
+	// getAccountsWithFallback() resolved to the real wallet account, `orders`
+	// state was never refreshed because those two deps hadn't changed, so users
+	// saw Alice's leftover orders instead of their own.
+	useEffect(() => {
+		if (contractAddress) {
+			loadAll();
+		} else {
+			setListings([]);
+			setOrders([]);
+			setTxStatus(null);
+		}
+	}, [contractAddress, ethRpcUrl, loadAll]);
 
 	async function placeBuyOrder(listing: Listing) {
 		if (!contractAddress) return;

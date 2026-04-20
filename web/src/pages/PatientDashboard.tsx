@@ -94,14 +94,6 @@ export default function PatientDashboard() {
 		checkStatementStoreAvailable(wsUrl).then(setStatementStoreAvailable);
 	}, [wsUrl]);
 
-	useEffect(() => {
-		if (contractAddress) {
-			loadListings();
-		} else {
-			setListings([]);
-		}
-	}, [contractAddress, ethRpcUrl]); // eslint-disable-line react-hooks/exhaustive-deps
-
 	function saveAddress(address: string) {
 		setContractAddress(address);
 		if (address) {
@@ -139,6 +131,24 @@ export default function PatientDashboard() {
 	}, []);
 
 	const currentAccount = accounts[selectedAccountIndex] ?? accounts[0];
+
+	// Fetch listings when contract, RPC, or the connected account changes.
+	// Previously this effect omitted currentAccount.evmAddress from its deps
+	// (and suppressed the ESLint warning) — which meant the initial fetch used
+	// the `devAccounts[0]` (Alice) fallback's evmAddress. After async
+	// getAccountsWithFallback() resolved to the real wallet account, `listings`
+	// state was never refreshed, so users saw Alice's listings instead of their
+	// own. loadListings is not useCallback-memoized so we depend on the input
+	// that loadListings's filter closes over (currentAccount.evmAddress) and
+	// accept the ESLint warning — depending on loadListings itself would cause
+	// an infinite loop.
+	useEffect(() => {
+		if (contractAddress) {
+			loadListings();
+		} else {
+			setListings([]);
+		}
+	}, [contractAddress, ethRpcUrl, currentAccount.evmAddress]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	async function verifyContract(): Promise<boolean> {
 		const client = getPublicClient(ethRpcUrl);
