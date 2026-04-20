@@ -8,7 +8,7 @@ node_modules/
 dist/
 .parcel-cache/
 *.tsbuildinfo
-
+dist.car
 # Environment
 .env
 .env.local

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type DragEvent } from "react";
+import { useState, useCallback, type DragEvent } from "react";
 import { Link } from "react-router-dom";
 import { devAccounts } from "../hooks/useAccount";
 import { deployments } from "../config/deployments";
@@ -10,13 +10,8 @@ import {
 	type BulletinUploadProgress,
 } from "../hooks/useBulletinUpload";
 import { createTransferRecord, checkContractDeployed, generateSlug } from "../hooks/useTransferContract";
-import { useWallet } from "../hooks/useWallet";
+import { getWalletClient } from "../config/evm";
 
-/**
- * Resolve the canonical app base URL for share links.
- * On dot.li the preview sandbox is served at {cid}.app.dot.li — strip ".app"
- * to get the stable entry point. Override with VITE_APP_URL if set.
- */
 function getAppBaseUrl(): string {
 	if (import.meta.env.VITE_APP_URL) {
 		return (import.meta.env.VITE_APP_URL as string).replace(/\/$/, "");
@@ -59,33 +54,16 @@ function progressLabel(progress: BulletinUploadProgress): string {
 	return "Upload complete";
 }
 
-function shortAddress(addr: string): string {
-	return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
-
-const CONTRACT_STORAGE_KEY = "dot-transfer-contract-address";
-
 export default function UploadPage() {
 	const ethRpcUrl = useChainStore((s) => s.ethRpcUrl);
-	const wallet = useWallet();
+
+	const contractAddress = deployments.dotTransfer ?? "";
 
 	const [file, setFile] = useState<File | null>(null);
 	const [dragging, setDragging] = useState(false);
 	const [expiryHours, setExpiryHours] = useState(24);
 	const [bulletinAccountIndex, setBulletinAccountIndex] = useState(0);
-	const [contractAddress, setContractAddress] = useState("");
 	const [step, setStep] = useState<UploadStep>({ type: "idle" });
-
-	useEffect(() => {
-		const stored = localStorage.getItem(`${CONTRACT_STORAGE_KEY}:${ethRpcUrl}`);
-		setContractAddress(stored || deployments.dotTransfer || "");
-	}, [ethRpcUrl]);
-
-	function saveContractAddress(addr: string) {
-		setContractAddress(addr);
-		if (addr) localStorage.setItem(`${CONTRACT_STORAGE_KEY}:${ethRpcUrl}`, addr);
-		else localStorage.removeItem(`${CONTRACT_STORAGE_KEY}:${ethRpcUrl}`);
-	}
 
 	const processFile = useCallback((f: File) => {
 		if (f.size > MAX_TRANSFER_SIZE) {
@@ -112,11 +90,10 @@ export default function UploadPage() {
 	}
 
 	async function handleUpload() {
-		if (!file || !contractAddress || !wallet.connected) return;
+		if (!file || !contractAddress) return;
 		setStep({ type: "authorizing" });
 
 		try {
-			// Verify contract is deployed
 			const deployed = await checkContractDeployed(contractAddress, ethRpcUrl);
 			if (!deployed) {
 				setStep({
@@ -126,7 +103,6 @@ export default function UploadPage() {
 				return;
 			}
 
-			// Check Bulletin Chain authorization for the selected dev account
 			const substrateAddress = devAccounts[bulletinAccountIndex].address;
 			const authorized = await checkTransferAuthorization(substrateAddress, file.size);
 			if (!authorized) {
@@ -139,17 +115,15 @@ export default function UploadPage() {
 				return;
 			}
 
-			// Upload file chunks to Bulletin Chain using the authorized dev account
 			const substrateSigner = devAccounts[bulletinAccountIndex].signer;
 			const uploadResult = await uploadFileToBulletin(file, substrateSigner, (progress) => {
 				setStep({ type: "uploading", progress });
 			});
 
-			// Record the transfer on the PVM contract using the connected wallet
 			setStep({ type: "signing" });
 			const expiresAt = Math.floor(Date.now() / 1000) + expiryHours * 3600;
 			const slug = generateSlug();
-			const walletClient = await wallet.getWalletClient(ethRpcUrl);
+			const walletClient = await getWalletClient(bulletinAccountIndex, ethRpcUrl);
 
 			await createTransferRecord(
 				contractAddress,
@@ -180,11 +154,10 @@ export default function UploadPage() {
 	const isWorking =
 		step.type === "authorizing" || step.type === "uploading" || step.type === "signing";
 
-	const canUpload = file && contractAddress && wallet.connected && !isWorking && step.type !== "done";
+	const canUpload = file && contractAddress && !isWorking && step.type !== "done";
 
 	return (
 		<div className="space-y-6 animate-fade-in">
-			{/* Header */}
 			<div className="space-y-1">
 				<h1 className="page-title text-polka-400">StarDot</h1>
 				<p className="text-text-secondary">
@@ -202,88 +175,13 @@ export default function UploadPage() {
 				</p>
 			</div>
 
-			{/* Wallet connect */}
-			<div className="card space-y-3">
-				<div className="flex items-center justify-between">
-					<div>
-						<p className="label mb-0.5">Your Wallet</p>
-						<p className="text-xs text-text-muted">
-							Used to sign the on-chain transfer record (msg.sender = uploader)
-						</p>
-					</div>
-					{wallet.connected ? (
-						<div className="flex items-center gap-2">
-							<span className="w-2 h-2 rounded-full bg-accent-green shadow-[0_0_6px_rgba(52,211,153,0.5)]" />
-							<span className="font-mono text-sm text-text-primary">
-								{shortAddress(wallet.address!)}
-							</span>
-							<button
-								onClick={wallet.disconnect}
-								className="text-xs text-text-muted hover:text-text-secondary"
-							>
-								Disconnect
-							</button>
-						</div>
-					) : (
-						<button
-							onClick={wallet.connect}
-							disabled={wallet.connecting || !wallet.hasInjected}
-							className="btn-secondary text-sm"
-						>
-							{wallet.connecting
-								? "Connecting…"
-								: wallet.hasInjected
-								? "Connect Wallet"
-								: "No wallet detected"}
-						</button>
-					)}
-				</div>
-				{wallet.error && (
-					<p className="text-xs text-accent-red">{wallet.error}</p>
-				)}
-				{!wallet.hasInjected && (
-					<p className="text-xs text-accent-yellow">
-						Install MetaMask or SubWallet browser extension to connect.
-					</p>
-				)}
-			</div>
-
 			{/* Upload settings */}
 			<div className="card space-y-4">
-				{/* Contract address */}
+				{/* Dev account selector */}
 				<div>
-					<label className="label">DotTransfer Contract Address</label>
-					<div className="flex gap-2">
-						<input
-							type="text"
-							value={contractAddress}
-							onChange={(e) => saveContractAddress(e.target.value)}
-							placeholder="0x… (deploy with: cd contracts/pvm && npm run deploy:testnet)"
-							className="input-field w-full"
-							disabled={isWorking}
-						/>
-						{deployments.dotTransfer && contractAddress !== deployments.dotTransfer && (
-							<button
-								onClick={() => saveContractAddress(deployments.dotTransfer!)}
-								className="btn-secondary text-xs whitespace-nowrap"
-							>
-								Reset
-							</button>
-						)}
-					</div>
-					{!contractAddress && (
-						<p className="mt-1 text-xs text-accent-yellow">
-							Deploy the DotTransfer contract and paste its address here.
-						</p>
-					)}
-				</div>
-
-				{/* Bulletin Chain account selector */}
-				<div>
-					<label className="label">Bulletin Chain Storage Account</label>
+					<label className="label">Dev Account</label>
 					<p className="text-xs text-text-muted mb-1.5">
-						Pre-authorized dev account used to store file data on the Bulletin Chain.
-						Separate from your wallet above.
+						Pre-authorized dev account used for Bulletin Chain storage and PVM contract signing.
 					</p>
 					<select
 						value={bulletinAccountIndex}
@@ -385,19 +283,17 @@ export default function UploadPage() {
 							opacity: canUpload ? 1 : 0.4,
 						}}
 					>
-						{!wallet.connected ? "Connect wallet to upload" : "Upload & Share"}
+						Upload & Share
 					</button>
 				)}
 			</div>
 
-			{/* Progress / status */}
 			{(isWorking || step.type === "error" || step.type === "done") && (
 				<div className="card space-y-3">
 					<StepIndicator step={step} />
 				</div>
 			)}
 
-			{/* Shareable link */}
 			{step.type === "done" && shareLink && (
 				<div className="card space-y-4">
 					<div className="flex items-center gap-2">
@@ -416,7 +312,7 @@ export default function UploadPage() {
 					</div>
 
 					<div>
-						<label className="label">Share this link with your recipient</label>
+						<label className="label">Share this link</label>
 						<div className="flex gap-2">
 							<input
 								type="text"
