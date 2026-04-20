@@ -13,6 +13,9 @@
     "deploy:testnet": "npx hardhat run scripts/deploy.ts --network polkadotTestnet",
     "deploy-market:local": "npx hardhat run scripts/deploy-market.ts --network local",
     "deploy-market:testnet": "npx hardhat run scripts/deploy-market.ts --network polkadotTestnet",
+    "compute-multisig": "npx ts-node scripts/compute-multisig.ts",
+    "deploy-medic-authority:local": "npx hardhat run scripts/deploy-medic-authority.ts --network local",
+    "deploy-medic-authority:testnet": "npx hardhat run scripts/deploy-medic-authority.ts --network polkadotTestnet",
     "fmt": "prettier --write 'contracts/**/*.sol' 'scripts/**/*.ts' 'test/**/*.ts' hardhat.config.ts",
     "fmt:check": "prettier --check 'contracts/**/*.sol' 'scripts/**/*.ts' 'test/**/*.ts' hardhat.config.ts"
   },

@@ -36,28 +36,28 @@ echo ""
 validate_full_external_toolchain
 validate_full_stack_ports
 
-echo "[1/8] Building runtime..."
+echo "[1/9] Building runtime..."
 build_runtime
 
-echo "[2/8] Generating chain spec..."
+echo "[2/9] Generating chain spec..."
 generate_chain_spec
 
-echo "[3/8] Compiling contracts..."
+echo "[3/9] Compiling contracts..."
 cd "$ROOT_DIR/contracts/evm" && npm install --silent && npx hardhat compile
 cd "$ROOT_DIR/contracts/pvm" && npm install --silent && npx hardhat compile
 cd "$ROOT_DIR"
 
-echo "[4/8] Starting Zombienet (relay chain + parachain)..."
+echo "[4/9] Starting Zombienet (relay chain + parachain)..."
 log_info "This takes longer than dev mode because the relay chain must finalize"
 log_info "and the parachain must register before the collator starts authoring."
 start_zombienet_background
 wait_for_substrate_rpc
 
-echo "[5/8] Starting eth-rpc adapter..."
+echo "[5/9] Starting eth-rpc adapter..."
 start_eth_rpc_background
 wait_for_eth_rpc
 
-echo "[6/8] Deploying contracts..."
+echo "[6/9] Deploying contracts..."
 echo "  Deploying ProofOfExistence via EVM (solc)..."
 cd "$ROOT_DIR/contracts/evm"
 npm run deploy:local
@@ -70,12 +70,20 @@ echo "  Deploying MedicalMarket via PVM (resolc)..."
 cd "$ROOT_DIR/contracts/pvm"
 npm run deploy-market:local
 
+echo "[7/9] Deploying MedicAuthority governance registry..."
+echo "  Computing deterministic multisig AccountId + H160 (Alice/Bob/Charlie, 2-of-3)..."
+cd "$ROOT_DIR/contracts/pvm"
+npm run compute-multisig
+
+echo "  Deploying MedicAuthority with multisig H160 as sole initial authority..."
+npm run deploy-medic-authority:local
+
 cd "$ROOT_DIR"
 
-echo "[7/8] Building CLI..."
+echo "[8/9] Building CLI..."
 cargo build -p stack-cli --release
 
-echo "[8/8] Starting frontend..."
+echo "[9/9] Starting frontend..."
 cd "$ROOT_DIR/web"
 npm install
 
@@ -101,6 +109,13 @@ log_info "Frontend:      $FRONTEND_URL"
 log_info "Zombienet dir: $ZOMBIE_DIR"
 echo ""
 log_info "Included examples: PoE pallet, EVM contract, PVM contract, Statement Store, Bulletin upload"
+log_info "MedicAuthority registry deployed. To activate the verified-medic badge in the UI:"
+log_info "  cd contracts/pvm"
+log_info "  npx ts-node scripts/fund-multisig.ts"
+log_info "  npx ts-node --transpile-only scripts/multisig-map-account.ts --signer-index 0"
+log_info "  npx ts-node --transpile-only scripts/multisig-map-account.ts --signer-index 1"
+log_info "  npx ts-node --transpile-only scripts/multisig-add-medic.ts --medic <h160> --signer-index 0"
+log_info "  npx ts-node --transpile-only scripts/multisig-add-medic.ts --medic <h160> --signer-index 1"
 echo ""
 log_info "Tail all service logs in another terminal: ./scripts/tail-logs.sh"
 log_info "Press Ctrl+C to stop all."
