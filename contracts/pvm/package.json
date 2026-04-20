@@ -7,6 +7,8 @@
     "npm": ">=10"
   },
   "scripts": {
+    "postinstall": "papi generate",
+    "codegen": "papi generate",
     "compile": "npx hardhat compile",
     "test": "npx hardhat test",
     "deploy:local": "npx hardhat run scripts/deploy.ts --network local",
