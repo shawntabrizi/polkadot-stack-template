@@ -4,6 +4,8 @@ export default {
   theme: {
     extend: {
       colors: {
+        violet: '#7c3aed',
+        'surface-980': '#060609',
         surface: {
           950: "#0a0a0f",
           900: "rgba(16, 16, 24, 0.85)",
@@ -49,6 +51,7 @@ export default {
         "fade-in": "fadeIn 0.4s ease-out forwards",
         "slide-up": "slideUp 0.5s ease-out forwards",
         "pulse-slow": "pulse 3s ease-in-out infinite",
+        "shimmer": "shimmer 2s infinite",
       },
       keyframes: {
         fadeIn: {
@@ -58,6 +61,10 @@ export default {
         slideUp: {
           "0%": { opacity: "0", transform: "translateY(12px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        shimmer: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(100%)' },
         },
       },
       borderRadius: {

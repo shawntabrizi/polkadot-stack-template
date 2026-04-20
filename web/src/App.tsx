@@ -63,29 +63,104 @@ export default function App() {
 			{/* Ambient gradient orbs */}
 			<div
 				className="gradient-orb"
-				style={{ background: "#e6007a", top: "-200px", right: "-100px" }}
+				style={{ background: "#e6007a", top: "-150px", right: "-150px", opacity: 0.11 }}
 			/>
 			<div
 				className="gradient-orb"
-				style={{ background: "#4cc2ff", bottom: "-200px", left: "-100px" }}
+				style={{ background: "#4cc2ff", bottom: "-200px", left: "-200px", opacity: 0.07 }}
+			/>
+			<div
+				className="gradient-orb"
+				style={{
+					background: "#7c3aed",
+					top: "40%",
+					left: "30%",
+					opacity: 0.05,
+					width: "900px",
+					height: "900px",
+				}}
 			/>
 
 			{/* Navigation */}
-			<nav className="sticky top-0 z-50 border-b border-white/[0.06] backdrop-blur-xl bg-surface-950/80">
+			<nav className="sticky top-0 z-50 border-b border-white/[0.08] backdrop-blur-2xl bg-surface-950/90">
 				<div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-6">
-					<Link to="/" className="flex items-center gap-2.5 shrink-0 group">
-						<div className="w-7 h-7 rounded-lg bg-gradient-to-br from-polka-500 to-polka-700 flex items-center justify-center shadow-glow transition-shadow group-hover:shadow-glow-lg">
-							<svg viewBox="0 0 16 16" className="w-4 h-4" fill="white">
-								<circle cx="8" cy="3" r="2" />
-								<circle cx="3" cy="8" r="2" />
-								<circle cx="13" cy="8" r="2" />
-								<circle cx="8" cy="13" r="2" />
-								<circle cx="8" cy="8" r="1.5" opacity="0.6" />
+					<Link to="/" className="flex items-center gap-3 shrink-0 group">
+						<div className="w-9 h-9 rounded-xl bg-gradient-to-br from-polka-400 via-polka-600 to-[#7c3aed] flex items-center justify-center shadow-glow group-hover:shadow-glow-lg transition-all duration-300">
+							<svg viewBox="0 0 20 20" className="w-5 h-5" fill="none">
+								<circle cx="10" cy="10" r="2.5" fill="white" />
+								<circle cx="10" cy="3" r="1.4" fill="white" opacity="0.9" />
+								<circle cx="16" cy="6.5" r="1.4" fill="white" opacity="0.9" />
+								<circle cx="16" cy="13.5" r="1.4" fill="white" opacity="0.9" />
+								<circle cx="10" cy="17" r="1.4" fill="white" opacity="0.9" />
+								<circle cx="4" cy="13.5" r="1.4" fill="white" opacity="0.9" />
+								<circle cx="4" cy="6.5" r="1.4" fill="white" opacity="0.9" />
+								<line
+									x1="10"
+									y1="7.5"
+									x2="10"
+									y2="4.4"
+									stroke="white"
+									strokeWidth="0.8"
+									opacity="0.45"
+								/>
+								<line
+									x1="10"
+									y1="12.5"
+									x2="10"
+									y2="15.6"
+									stroke="white"
+									strokeWidth="0.8"
+									opacity="0.45"
+								/>
+								<line
+									x1="10"
+									y1="7.8"
+									x2="14.7"
+									y2="7.9"
+									stroke="white"
+									strokeWidth="0.8"
+									opacity="0.45"
+								/>
+								<line
+									x1="10"
+									y1="12.2"
+									x2="14.7"
+									y2="12.1"
+									stroke="white"
+									strokeWidth="0.8"
+									opacity="0.45"
+								/>
+								<line
+									x1="10"
+									y1="7.8"
+									x2="5.3"
+									y2="7.9"
+									stroke="white"
+									strokeWidth="0.8"
+									opacity="0.45"
+								/>
+								<line
+									x1="10"
+									y1="12.2"
+									x2="5.3"
+									y2="12.1"
+									stroke="white"
+									strokeWidth="0.8"
+									opacity="0.45"
+								/>
 							</svg>
 						</div>
-						<span className="text-base font-semibold text-text-primary font-display tracking-tight">
-							Polkadot Stack
-						</span>
+						<div className="flex flex-col leading-none gap-0.5">
+							<span className="text-sm font-bold text-text-primary font-display tracking-tight">
+								Polkadot
+							</span>
+							<span
+								className="font-medium tracking-widest uppercase text-polka-500"
+								style={{ fontSize: "0.6rem" }}
+							>
+								Stack Template
+							</span>
+						</div>
 					</Link>
 
 					<div className="flex gap-0.5 overflow-x-auto">
