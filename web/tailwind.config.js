@@ -4,11 +4,13 @@ export default {
   theme: {
     extend: {
       colors: {
+        violet: '#7c3aed',
+        'surface-980': '#060609',
         surface: {
-          950: "#0a0a0f",
-          900: "rgba(16, 16, 24, 0.85)",
-          800: "rgba(24, 24, 36, 0.9)",
-          700: "rgba(36, 36, 52, 0.95)",
+          950: "#060c1a",
+          900: "rgba(8, 18, 38, 0.9)",
+          800: "rgba(12, 24, 52, 0.95)",
+          700: "rgba(16, 32, 64, 0.97)",
         },
         polka: {
           50: "#fff1f3",
@@ -23,18 +25,20 @@ export default {
           900: "#740041",
         },
         accent: {
-          blue: "#4cc2ff",
+          blue: "#06b6d4",
+          teal: "#0891b2",
           purple: "#a78bfa",
           green: "#34d399",
           orange: "#fb923c",
           red: "#f87171",
           yellow: "#fbbf24",
         },
+        clinical: "#0ea5e9",
         text: {
           primary: "#f0eef5",
-          secondary: "#9b97a8",
-          tertiary: "#6b6780",
-          muted: "#4a4660",
+          secondary: "#ccc9d8",
+          tertiary: "#b0acbe",
+          muted: "#8e8ba0",
         },
       },
       fontFamily: {
@@ -49,6 +53,7 @@ export default {
         "fade-in": "fadeIn 0.4s ease-out forwards",
         "slide-up": "slideUp 0.5s ease-out forwards",
         "pulse-slow": "pulse 3s ease-in-out infinite",
+        "shimmer": "shimmer 2s infinite",
       },
       keyframes: {
         fadeIn: {
@@ -58,6 +63,10 @@ export default {
         slideUp: {
           "0%": { opacity: "0", transform: "translateY(12px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        shimmer: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(100%)' },
         },
       },
       borderRadius: {

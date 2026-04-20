@@ -632,7 +632,7 @@ export default function PatientDashboard() {
 				</div>
 
 				{listings.length === 0 ? (
-					<p className="text-text-muted text-sm">
+					<p className="text-text-secondary text-sm">
 						No listings found for this account. Create one above.
 					</p>
 				) : (

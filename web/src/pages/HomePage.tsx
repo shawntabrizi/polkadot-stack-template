@@ -67,7 +67,9 @@ export default function HomePage() {
 	return (
 		<div className="space-y-8 animate-fade-in">
 			{/* Hero */}
-			<div className="space-y-3">
+			<div className="relative space-y-3">
+				{/* Mesh background */}
+				<div className="bg-mesh absolute inset-0 pointer-events-none opacity-40 -z-10" />
 				<h1 className="page-title">
 					Sell verified medical records.{" "}
 					<span className="bg-gradient-to-r from-polka-400 to-polka-600 bg-clip-text text-transparent">
@@ -91,44 +93,65 @@ export default function HomePage() {
 
 			{/* Marketplace cards */}
 			<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-				<FeatureCard
-					title="Researcher"
-					description="Browse verified listings, place buy offers, and decrypt purchased clinical data."
-					link="/researcher"
-					accentColor="text-accent-green"
-					borderColor="hover:border-accent-green/20"
-					available={true}
-					unavailableReason=""
-				/>
-				<FeatureCard
-					title="Patient"
-					description="Publish attested health records, set disclosure rules, manage listings, track earnings."
-					link="/patient"
-					accentColor="text-accent-blue"
-					borderColor="hover:border-accent-blue/20"
-					available={true}
-					unavailableReason=""
-				/>
-				<FeatureCard
-					title="Medic"
-					description="Sign patient records with your professional key so they can be sold on the marketplace."
-					link="/medic"
-					accentColor="text-accent-purple"
-					borderColor="hover:border-accent-purple/20"
-					available={true}
-					unavailableReason=""
-				/>
+				<div
+					style={{
+						borderLeft: "2px solid rgba(6, 182, 212, 0.45)",
+						borderRadius: "16px",
+					}}
+				>
+					<FeatureCard
+						title="Researcher"
+						description="Browse verified listings, place buy offers, and decrypt purchased clinical data."
+						link="/researcher"
+						accentColor="text-accent-green"
+						borderColor="hover:border-accent-green/20"
+						available={true}
+						unavailableReason=""
+					/>
+				</div>
+				<div
+					style={{
+						borderLeft: "2px solid rgba(76, 194, 255, 0.45)",
+						borderRadius: "16px",
+					}}
+				>
+					<FeatureCard
+						title="Patient"
+						description="Publish attested health records, set disclosure rules, manage listings, track earnings."
+						link="/patient"
+						accentColor="text-accent-blue"
+						borderColor="hover:border-accent-blue/20"
+						available={true}
+						unavailableReason=""
+					/>
+				</div>
+				<div
+					style={{
+						borderLeft: "2px solid rgba(167, 139, 250, 0.45)",
+						borderRadius: "16px",
+					}}
+				>
+					<FeatureCard
+						title="Medic"
+						description="Sign patient records with your professional key so they can be sold on the marketplace."
+						link="/medic"
+						accentColor="text-accent-purple"
+						borderColor="hover:border-accent-purple/20"
+						available={true}
+						unavailableReason=""
+					/>
+				</div>
 			</div>
 
 			{isDev && (
 				<>
 					{/* Divider */}
-					<div className="flex items-center gap-4">
-						<div className="flex-1 h-px bg-white/[0.06]" />
-						<span className="text-xs text-text-muted uppercase tracking-wider">
+					<div className="relative flex items-center gap-4 py-2">
+						<div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+						<span className="text-xs font-medium tracking-widest uppercase text-text-muted px-2">
 							Template Reference (PoE)
 						</span>
-						<div className="flex-1 h-px bg-white/[0.06]" />
+						<div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 					</div>
 
 					{/* Connection card */}

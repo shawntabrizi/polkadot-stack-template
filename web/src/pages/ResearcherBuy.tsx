@@ -534,7 +534,7 @@ export default function ResearcherBuy() {
 				</div>
 
 				{listings.filter((l) => l.active).length === 0 ? (
-					<p className="text-text-muted text-sm">
+					<p className="text-text-secondary text-sm">
 						No active listings found. Click Refresh to load.
 					</p>
 				) : (
@@ -606,7 +606,7 @@ export default function ResearcherBuy() {
 				<h2 className="section-title">My Orders</h2>
 
 				{orders.length === 0 ? (
-					<p className="text-text-muted text-sm">
+					<p className="text-text-secondary text-sm">
 						No orders placed yet. Buy a listing above to get started.
 					</p>
 				) : (
