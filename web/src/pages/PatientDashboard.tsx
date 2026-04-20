@@ -418,14 +418,14 @@ export default function PatientDashboard() {
 			// 3. Upload ciphertext to Statement Store. Abort if rejected — the
 			//    buyer can't decrypt without it, so we don't release payment.
 			setTxStatus("Uploading ciphertext to Statement Store…");
-			const stmtSigner = currentAccount.localSigner ?? currentAccount.signer;
+			const stmtSigner = currentAccount.localSigner;
 			await submitStatement(
 				wsUrl,
 				ciphertextBytes,
 				ciphertextHash32,
 				MARKETPLACE_ACCOUNT_ID,
-				stmtSigner.publicKey,
-				stmtSigner.signBytes,
+				stmtSigner?.publicKey,
+				stmtSigner?.signBytes,
 			);
 
 			// 4. Submit fulfill on-chain — releases payment, stores (ephPk,

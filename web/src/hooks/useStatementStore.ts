@@ -360,9 +360,17 @@ export async function submitStatement(
 	publicKey?: Uint8Array, // local-dev fallback
 	sign?: (msg: Uint8Array) => Uint8Array | Promise<Uint8Array>,
 ): Promise<void> {
-	if (!isInHost()) {
-		if (!publicKey || !sign) throw new Error("publicKey and sign required outside Host");
+	// If a local signer is supplied, use raw RPC — even inside Host. The
+	// Nova Wallet Host only signs for accounts it holds; dev keys like
+	// //Alice aren't in the wallet, so the SDK path returns
+	// StatementProofErr::UnableToSign. The raw path signs with the local
+	// keypair directly and bypasses the Host's account lookup.
+	if (publicKey && sign) {
 		return _rawSubmit(wsUrl, encrypted, publicKey, sign);
+	}
+
+	if (!isInHost()) {
+		throw new Error("publicKey and sign required outside Host");
 	}
 
 	const statement: Statement = {
