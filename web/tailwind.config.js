@@ -36,9 +36,9 @@ export default {
         clinical: "#0ea5e9",
         text: {
           primary: "#f0eef5",
-          secondary: "#c4c1d0",
-          tertiary: "#9b97ac",
-          muted: "#6e6b80",
+          secondary: "#ccc9d8",
+          tertiary: "#b0acbe",
+          muted: "#8e8ba0",
         },
       },
       fontFamily: {

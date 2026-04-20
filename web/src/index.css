@@ -92,7 +92,7 @@
 		box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.12);
 		background: rgba(6, 20, 50, 0.5);
 	}
-	.input-field::placeholder { color: #6e6b80; }
+	.input-field::placeholder { color: #8e8ba0; }
 
 	.btn-primary {
 		display: inline-flex;

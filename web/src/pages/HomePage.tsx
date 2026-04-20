@@ -95,7 +95,7 @@ export default function HomePage() {
 			<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 				<div
 					style={{
-						borderLeft: "2px solid rgba(52, 211, 153, 0.45)",
+						borderLeft: "2px solid rgba(6, 182, 212, 0.45)",
 						borderRadius: "16px",
 					}}
 				>

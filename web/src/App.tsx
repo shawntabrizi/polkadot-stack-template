@@ -63,19 +63,19 @@ export default function App() {
 			{/* Ambient gradient orbs */}
 			<div
 				className="gradient-orb"
-				style={{ background: "#e6007a", top: "-150px", right: "-150px", opacity: 0.11 }}
+				style={{ background: "#e6007a", top: "-150px", right: "-150px", opacity: 0.09 }}
 			/>
 			<div
 				className="gradient-orb"
-				style={{ background: "#4cc2ff", bottom: "-200px", left: "-200px", opacity: 0.07 }}
+				style={{ background: "#06b6d4", bottom: "-200px", left: "-200px", opacity: 0.1 }}
 			/>
 			<div
 				className="gradient-orb"
 				style={{
-					background: "#7c3aed",
+					background: "#0369a1",
 					top: "40%",
 					left: "30%",
-					opacity: 0.05,
+					opacity: 0.06,
 					width: "900px",
 					height: "900px",
 				}}
@@ -85,7 +85,7 @@ export default function App() {
 			<nav className="sticky top-0 z-50 border-b border-white/[0.08] backdrop-blur-2xl bg-surface-950/90">
 				<div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-6">
 					<Link to="/" className="flex items-center gap-3 shrink-0 group">
-						<div className="w-9 h-9 rounded-xl bg-gradient-to-br from-polka-400 via-polka-600 to-[#7c3aed] flex items-center justify-center shadow-glow group-hover:shadow-glow-lg transition-all duration-300">
+						<div className="w-9 h-9 rounded-xl bg-gradient-to-br from-polka-400 via-polka-600 to-[#0891b2] flex items-center justify-center shadow-glow group-hover:shadow-glow-lg transition-all duration-300">
 							<svg viewBox="0 0 20 20" className="w-5 h-5" fill="none">
 								<circle cx="10" cy="10" r="2.5" fill="white" />
 								<circle cx="10" cy="3" r="1.4" fill="white" opacity="0.9" />
@@ -155,8 +155,8 @@ export default function App() {
 								Polkadot
 							</span>
 							<span
-								className="font-medium tracking-widest uppercase text-polka-500"
-								style={{ fontSize: "0.6rem" }}
+								className="font-medium tracking-widest uppercase"
+								style={{ fontSize: "0.6rem", color: "#06b6d4" }}
 							>
 								Stack Template
 							</span>
