@@ -78,6 +78,9 @@ npm run compute-multisig
 echo "  Deploying MedicAuthority with multisig H160 as sole initial authority..."
 npm run deploy-medic-authority:local
 
+echo "  Bootstrapping demo: fund multisig, map in pallet-revive, add Alice as medic..."
+npm run bootstrap-demo-medic:local
+
 cd "$ROOT_DIR"
 
 echo "[8/9] Building CLI..."
@@ -109,11 +112,9 @@ log_info "Frontend:      $FRONTEND_URL"
 log_info "Zombienet dir: $ZOMBIE_DIR"
 echo ""
 log_info "Included examples: PoE pallet, EVM contract, PVM contract, Statement Store, Bulletin upload"
-log_info "MedicAuthority registry deployed. To activate the verified-medic badge in the UI:"
+log_info "MedicAuthority registry is live with Alice pre-registered as a verified medic."
+log_info "To add more medics after startup:"
 log_info "  cd contracts/pvm"
-log_info "  npx ts-node scripts/fund-multisig.ts"
-log_info "  npx ts-node --transpile-only scripts/multisig-map-account.ts --signer-index 0"
-log_info "  npx ts-node --transpile-only scripts/multisig-map-account.ts --signer-index 1"
 log_info "  npx ts-node --transpile-only scripts/multisig-add-medic.ts --medic <h160> --signer-index 0"
 log_info "  npx ts-node --transpile-only scripts/multisig-add-medic.ts --medic <h160> --signer-index 1"
 echo ""
