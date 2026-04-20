@@ -229,7 +229,10 @@ export default function ResearcherBuy() {
 					patient,
 					active,
 				] = result;
-				if (!active) continue;
+				// Keep inactive listings in state too — decryptAndView() needs the
+				// listing metadata (recordCommit, medicPk, …) for any fulfilled order
+				// in My Orders, and fulfilled listings have `active=false`. The
+				// Active Listings render loop filters on `listing.active` below.
 				const pendingOrderId = (await client.readContract({
 					address: addr,
 					abi: medicalMarketAbi,
@@ -530,68 +533,70 @@ export default function ResearcherBuy() {
 					</button>
 				</div>
 
-				{listings.length === 0 ? (
+				{listings.filter((l) => l.active).length === 0 ? (
 					<p className="text-text-muted text-sm">
 						No active listings found. Click Refresh to load.
 					</p>
 				) : (
 					<div className="space-y-2">
-						{listings.map((listing) => (
-							<div
-								key={listing.id.toString()}
-								className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm space-y-1.5"
-							>
-								<div className="flex items-start justify-between gap-2">
-									<div>
-										<p className="text-text-primary font-medium">
-											{listing.title}
-										</p>
-										<p className="text-text-tertiary text-xs mt-0.5">
-											Listing #{listing.id.toString()}
-										</p>
+						{listings
+							.filter((l) => l.active)
+							.map((listing) => (
+								<div
+									key={listing.id.toString()}
+									className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm space-y-1.5"
+								>
+									<div className="flex items-start justify-between gap-2">
+										<div>
+											<p className="text-text-primary font-medium">
+												{listing.title}
+											</p>
+											<p className="text-text-tertiary text-xs mt-0.5">
+												Listing #{listing.id.toString()}
+											</p>
+										</div>
+										{listing.pendingOrderId > 0n ? (
+											<span className="px-2 py-0.5 rounded-full bg-white/[0.04] text-text-muted text-xs font-medium whitespace-nowrap">
+												Pending order
+											</span>
+										) : (
+											<button
+												onClick={() => placeBuyOrder(listing)}
+												className="btn-accent text-xs px-3 py-1 whitespace-nowrap"
+												style={{
+													background:
+														"linear-gradient(135deg, #4cc2ff 0%, #0090d4 100%)",
+													boxShadow:
+														"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
+												}}
+											>
+												Buy for {formatEther(listing.price)} PAS
+											</button>
+										)}
 									</div>
-									{listing.pendingOrderId > 0n ? (
-										<span className="px-2 py-0.5 rounded-full bg-white/[0.04] text-text-muted text-xs font-medium whitespace-nowrap">
-											Pending order
+									<p className="font-mono text-xs text-text-muted break-all">
+										Commit:{" "}
+										{listing.recordCommit
+											.toString(16)
+											.slice(0, 12)
+											.padStart(12, "0")}
+										…
+									</p>
+									<p className="text-text-tertiary">
+										Patient:{" "}
+										<span className="text-text-secondary font-mono">
+											{truncate(listing.patient)}
+										</span>{" "}
+										| Price:{" "}
+										<span className="text-text-secondary">
+											{formatEther(listing.price)} PAS
 										</span>
-									) : (
-										<button
-											onClick={() => placeBuyOrder(listing)}
-											className="btn-accent text-xs px-3 py-1 whitespace-nowrap"
-											style={{
-												background:
-													"linear-gradient(135deg, #4cc2ff 0%, #0090d4 100%)",
-												boxShadow:
-													"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
-											}}
-										>
-											Buy for {formatEther(listing.price)} PAS
-										</button>
-									)}
+									</p>
+									<div>
+										<VerifiedBadge address={listing.patient} />
+									</div>
 								</div>
-								<p className="font-mono text-xs text-text-muted break-all">
-									Commit:{" "}
-									{listing.recordCommit
-										.toString(16)
-										.slice(0, 12)
-										.padStart(12, "0")}
-									…
-								</p>
-								<p className="text-text-tertiary">
-									Patient:{" "}
-									<span className="text-text-secondary font-mono">
-										{truncate(listing.patient)}
-									</span>{" "}
-									| Price:{" "}
-									<span className="text-text-secondary">
-										{formatEther(listing.price)} PAS
-									</span>
-								</p>
-								<div>
-									<VerifiedBadge address={listing.patient} />
-								</div>
-							</div>
-						))}
+							))}
 					</div>
 				)}
 			</div>
