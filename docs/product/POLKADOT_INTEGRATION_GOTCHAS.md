@@ -415,6 +415,61 @@ responsible for era management.
 
 ---
 
+### 13. `papi generate` prints TS errors every startup and `generated.json` never updates
+
+**Layer**: dev tooling (`@polkadot-api/cli@0.18.1`)
+
+**Hit on**: 2026-04-20 (polkadot-api@1.23.3, @polkadot-api/cli@0.18.1, TypeScript 5.x)
+
+**Symptom**:
+```
+Compilation started
+error TS5107: Option 'moduleResolution=node10' is deprecated and will stop functioning
+  in TypeScript 7.0. Specify compilerOption '"ignoreDeprecations": "6.0"' to silence.
+.papi/descriptors/src/index.ts(13,18): error TS7053: Element implicitly has an 'any'
+  type because expression of type 'string' can't be used to index type
+  '{ "0xb50def...": IDescriptors; }'.
+Compilation done with 2 errors
+```
+
+Appears on every `start-all.sh` run after the chain spec is regenerated (new genesis/code hash).
+
+**Cause**: the CLI's internal `compileCodegen()` runs two steps:
+
+1. **tsup bundle** (CJS + ESM) — succeeds; produces correct `dist/` files.
+2. **tsc declaration pass** — fails with two bugs hardcoded in `@polkadot-api/cli/dist/chunk-UMZZTPR7.js`:
+   - `moduleResolution: "node"` is the deprecated `node10` alias in TS 5.x; TS emits TS5107.
+   - The generated `src/index.ts` template accesses `metadatas[codeHash]` where `metadatas`
+     has a narrow literal-keyed type — TypeScript raises TS7053 with `noImplicitAny`.
+
+When the declaration pass fails, `compileCodegen` returns `false` and the `tagGenerated()` call
+that writes `generated.json` is skipped. On the next startup, papi sees the metadata hash has
+changed (new chain spec) and regenerates again — same errors, same outcome, loop forever.
+
+The bundles are correct and `papi generate` exits 0 regardless, so the web app works fine.
+The sole practical impact is the noise + the ~200 ms regeneration on every startup.
+
+**Fix / workaround**: patch the compiler option lines in the CLI bundle — replace
+`moduleResolution: "node"` with `"bundler"` (compatible with `module: "esnext"`, allows bare
+imports without `.js` extensions) and add `noImplicitAny: false`.
+Do NOT use `"node16"`: it requires explicit `.js` extensions on every relative import, which
+the papi-generated source doesn't have — trading two errors for sixteen.
+
+`web/scripts/patch-papi-cli.mjs` applies this automatically; it is invoked by the
+`postinstall` hook in `web/package.json` so it re-applies after every `npm install`:
+
+```js
+// web/package.json
+"postinstall": "node scripts/patch-papi-cli.mjs && npm run codegen"
+```
+
+**Upstream improvement**: `@polkadot-api/cli` should switch to `moduleResolution: "bundler"`
+and fix the generated `src/index.ts` template to cast
+`metadatas[codeHash as keyof typeof metadatas]`. Fixed in CLI versions > 0.18.1 (verify
+before removing the patch script when upgrading `polkadot-api`).
+
+---
+
 ## Open questions / things we noticed but didn't chase
 
 - **How to estimate pallet-multisig `max_weight` deterministically**: we tuned by hand. A

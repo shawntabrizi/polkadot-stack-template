@@ -9,6 +9,6 @@ export default tseslint.config(
 	reactHooks.configs.flat["recommended-latest"],
 	eslintConfigPrettier,
 	{
-		ignores: ["dist/", "node_modules/", ".papi/"],
+		ignores: ["dist/", "node_modules/", ".papi/", "scripts/"],
 	},
 );

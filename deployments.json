@@ -1,7 +1,16 @@
 {
-  "evm": "0xec8d19d09cdbaf5dd0a086bad5838bef508b218c",
-  "pvm": "0xb7d9b15b26afbde6f142da27574662d5855484db",
-  "medicalMarket": "0xddbaf6bec4c3a8fd4b2fadec23921f6d4b19d384",
-  "medicAuthority": null,
-  "multisig": null
+  "evm": "0xc01ee7f10ea4af4673cfff62710e1d7792aba8f3",
+  "pvm": "0x970951a12f975e6762482aca81e57d5a2a4e73f4",
+  "medicalMarket": "0x3ed62137c5db927cb137c26455969116bf0c23cb",
+  "medicAuthority": "0x962c0940d72e7db6c9a5f81f1ca87d8db2b82a23",
+  "multisig": {
+    "ss58": "5DjYJStmdZ2rcqXbXGX7TW85JsrW6uG4y9MUcLq2BoPMpRA7",
+    "h160": "0x9549ff5910afff47319cba6acd90c683278f267f",
+    "threshold": 2,
+    "signatories": [
+      "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+      "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+      "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+    ]
+  }
 }

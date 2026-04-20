@@ -4,6 +4,8 @@ import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
 import { filter, firstValueFrom } from "rxjs";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import VerifiedBadge from "../components/VerifiedBadge";
+import Spinner from "../components/Spinner";
+import Toast from "../components/Toast";
 import { deployments } from "../config/deployments";
 import { subscribeStatements } from "../hooks/useStatementStore";
 import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
@@ -515,13 +517,7 @@ export default function ResearcherBuy() {
 					</select>
 				</div>
 
-				{txStatus && (
-					<p
-						className={`text-sm font-medium ${txStatus.startsWith("Error") ? "text-accent-red" : "text-accent-green"}`}
-					>
-						{txStatus}
-					</p>
-				)}
+				<Toast message={txStatus} onClose={() => setTxStatus(null)} />
 			</div>
 
 			{/* Marketplace */}
@@ -562,7 +558,8 @@ export default function ResearcherBuy() {
 										) : (
 											<button
 												onClick={() => placeBuyOrder(listing)}
-												className="btn-accent text-xs px-3 py-1 whitespace-nowrap"
+												disabled={loading}
+												className="btn-accent text-xs px-3 py-1 whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
 												style={{
 													background:
 														"linear-gradient(135deg, #4cc2ff 0%, #0090d4 100%)",
@@ -570,7 +567,14 @@ export default function ResearcherBuy() {
 														"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 												}}
 											>
-												Buy for {formatEther(listing.price)} PAS
+												{loading ? (
+													<>
+														<Spinner />
+														Placing order…
+													</>
+												) : (
+													<>Buy for {formatEther(listing.price)} PAS</>
+												)}
 											</button>
 										)}
 									</div>
@@ -642,15 +646,24 @@ export default function ResearcherBuy() {
 									{!order.confirmed && !order.cancelled && (
 										<button
 											onClick={() => cancelOrder(order)}
-											className="px-2 py-1 rounded-md bg-accent-red/10 text-accent-red text-xs font-medium hover:bg-accent-red/20 transition-colors mt-1"
+											disabled={loading}
+											className="px-2 py-1 rounded-md bg-accent-red/10 text-accent-red text-xs font-medium hover:bg-accent-red/20 transition-colors mt-1 disabled:opacity-60 disabled:cursor-not-allowed"
 										>
-											Cancel &amp; Refund
+											{loading ? (
+												<>
+													<Spinner />
+													Cancelling…
+												</>
+											) : (
+												"Cancel & Refund"
+											)}
 										</button>
 									)}
 									{order.confirmed && !decrypted && (
 										<button
 											onClick={() => decryptAndView(order)}
-											className="btn-accent text-xs px-3 py-1 mt-1"
+											disabled={loading}
+											className="btn-accent text-xs px-3 py-1 mt-1 disabled:opacity-60 disabled:cursor-not-allowed"
 											style={{
 												background:
 													"linear-gradient(135deg, #4cc2ff 0%, #0090d4 100%)",
@@ -658,7 +671,14 @@ export default function ResearcherBuy() {
 													"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 											}}
 										>
-											Decrypt &amp; View
+											{loading ? (
+												<>
+													<Spinner />
+													{txStatus ?? "Decrypting…"}
+												</>
+											) : (
+												"Decrypt & View"
+											)}
 										</button>
 									)}
 									{decrypted && (

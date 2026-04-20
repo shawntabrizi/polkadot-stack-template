@@ -4,6 +4,8 @@ import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
 import { filter, firstValueFrom } from "rxjs";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import VerifiedBadge from "../components/VerifiedBadge";
+import Spinner from "../components/Spinner";
+import Toast from "../components/Toast";
 import { deployments } from "../config/deployments";
 import {
 	submitStatement,
@@ -596,26 +598,26 @@ export default function PatientDashboard() {
 				{importedPackage && fileBytes && (
 					<button
 						onClick={createListing}
-						className="btn-accent"
+						disabled={loading}
+						className="btn-accent disabled:opacity-60 disabled:cursor-not-allowed"
 						style={{
 							background: "linear-gradient(135deg, #e6007a 0%, #bc0062 100%)",
 							boxShadow:
 								"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 						}}
 					>
-						List Record
+						{loading ? (
+							<>
+								<Spinner />
+								Listing…
+							</>
+						) : (
+							"List Record"
+						)}
 					</button>
 				)}
 
-				{txStatus && (
-					<p
-						className={`text-sm font-medium ${
-							txStatus.startsWith("Error") ? "text-accent-red" : "text-accent-green"
-						}`}
-					>
-						{txStatus}
-					</p>
-				)}
+				<Toast message={txStatus} onClose={() => setTxStatus(null)} />
 			</div>
 
 			{/* My Listings */}
@@ -703,7 +705,7 @@ export default function PatientDashboard() {
 											onClick={() =>
 												fulfillOrder(orderIdForFulfill, listing.id)
 											}
-											disabled={statementStoreAvailable === false}
+											disabled={loading || statementStoreAvailable === false}
 											className="btn-accent text-xs px-3 py-1 disabled:opacity-40 disabled:cursor-not-allowed"
 											style={{
 												background:
@@ -712,17 +714,34 @@ export default function PatientDashboard() {
 													"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 											}}
 										>
-											Encrypt + Fulfill (Order #{orderIdForFulfill.toString()}
-											)
+											{loading ? (
+												<>
+													<Spinner />
+													{txStatus ?? "Processing…"}
+												</>
+											) : (
+												<>
+													Encrypt + Fulfill (Order #
+													{orderIdForFulfill.toString()})
+												</>
+											)}
 										</button>
 									)}
 
 									{listing.active && !hasPendingOrder && (
 										<button
 											onClick={() => cancelListing(listing.id)}
-											className="px-2 py-1 rounded-md bg-accent-red/10 text-accent-red text-xs font-medium hover:bg-accent-red/20 transition-colors"
+											disabled={loading}
+											className="px-2 py-1 rounded-md bg-accent-red/10 text-accent-red text-xs font-medium hover:bg-accent-red/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
 										>
-											Cancel Listing
+											{loading ? (
+												<>
+													<Spinner />
+													Cancelling…
+												</>
+											) : (
+												"Cancel Listing"
+											)}
 										</button>
 									)}
 								</div>

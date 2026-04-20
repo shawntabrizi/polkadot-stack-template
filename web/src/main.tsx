@@ -9,6 +9,7 @@ const AccountsPage = lazy(() => import("./pages/AccountsPage"));
 const PatientDashboard = lazy(() => import("./pages/PatientDashboard"));
 const MedicSign = lazy(() => import("./pages/MedicSign"));
 const ResearcherBuy = lazy(() => import("./pages/ResearcherBuy"));
+const GovernanceDashboard = lazy(() => import("./pages/GovernanceDashboard"));
 
 const routeFallback = (
 	<div className="card animate-pulse">
@@ -59,6 +60,14 @@ createRoot(document.getElementById("root")!).render(
 						element={
 							<Suspense fallback={routeFallback}>
 								<ResearcherBuy />
+							</Suspense>
+						}
+					/>
+					<Route
+						path="governance"
+						element={
+							<Suspense fallback={routeFallback}>
+								<GovernanceDashboard />
 							</Suspense>
 						}
 					/>
