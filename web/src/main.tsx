@@ -5,12 +5,7 @@ import App from "./App";
 import "./index.css";
 
 const HomePage = lazy(() => import("./pages/HomePage"));
-const PalletPage = lazy(() => import("./pages/PalletPage"));
-const EvmContractPage = lazy(() => import("./pages/EvmContractPage"));
-const PvmContractPage = lazy(() => import("./pages/PvmContractPage"));
 const AccountsPage = lazy(() => import("./pages/AccountsPage"));
-const StatementStorePage = lazy(() => import("./pages/StatementStorePage"));
-// Marketplace pages (stubs until contracts exist)
 const PatientDashboard = lazy(() => import("./pages/PatientDashboard"));
 const MedicSign = lazy(() => import("./pages/MedicSign"));
 const ResearcherBuy = lazy(() => import("./pages/ResearcherBuy"));
@@ -36,30 +31,6 @@ createRoot(document.getElementById("root")!).render(
 						}
 					/>
 					<Route
-						path="pallet"
-						element={
-							<Suspense fallback={routeFallback}>
-								<PalletPage />
-							</Suspense>
-						}
-					/>
-					<Route
-						path="evm"
-						element={
-							<Suspense fallback={routeFallback}>
-								<EvmContractPage />
-							</Suspense>
-						}
-					/>
-					<Route
-						path="pvm"
-						element={
-							<Suspense fallback={routeFallback}>
-								<PvmContractPage />
-							</Suspense>
-						}
-					/>
-					<Route
 						path="accounts"
 						element={
 							<Suspense fallback={routeFallback}>
@@ -67,15 +38,6 @@ createRoot(document.getElementById("root")!).render(
 							</Suspense>
 						}
 					/>
-					<Route
-						path="statements"
-						element={
-							<Suspense fallback={routeFallback}>
-								<StatementStorePage />
-							</Suspense>
-						}
-					/>
-					{/* Marketplace routes */}
 					<Route
 						path="patient"
 						element={

@@ -17,15 +17,11 @@ function isInHost(): boolean {
 
 export default function App() {
 	const location = useLocation();
-	const pallets = useChainStore((s) => s.pallets);
 	const connected = useChainStore((s) => s.connected);
 
 	useConnectionManagement();
 
 	// Request TransactionSubmit permission upfront from the Polkadot Host.
-	// Without this, every signing operation (statement store createProof +
-	// on-chain Revive.call) is silently rejected with SigningErr::PermissionDenied.
-	// Matches the pattern in host-api-example/apps/web/src/provider.ts.
 	useEffect(() => {
 		if (!isInHost()) return;
 		hostApi.permission(enumValue("v1", { tag: "TransactionSubmit", value: undefined })).match(
@@ -38,24 +34,10 @@ export default function App() {
 
 	const navItems = [
 		{ path: "/", label: "Home", enabled: true },
-		// Marketplace (required order)
 		{ path: "/researcher", label: "Researcher", enabled: true },
 		{ path: "/patient", label: "Patient", enabled: true },
 		{ path: "/medic", label: "Medic", enabled: true },
-		// Template reference (PoE) — dev only
-		...(isDev
-			? [
-					{
-						path: "/pallet",
-						label: "Pallet PoE",
-						enabled: pallets.templatePallet === true,
-					},
-					{ path: "/evm", label: "EVM PoE", enabled: pallets.revive === true },
-					{ path: "/pvm", label: "PVM PoE", enabled: pallets.revive === true },
-					{ path: "/statements", label: "Statements", enabled: true },
-					{ path: "/accounts", label: "Accounts", enabled: true },
-				]
-			: []),
+		...(isDev ? [{ path: "/accounts", label: "Accounts", enabled: true }] : []),
 	];
 
 	return (
