@@ -21,9 +21,17 @@ import { createClient, Binary, FixedSizeBinary } from "polkadot-api";
 import { getWsProvider } from "polkadot-api/ws-provider/node";
 import { withPolkadotSdkCompat } from "polkadot-api/polkadot-sdk-compat";
 import { getPolkadotSigner } from "polkadot-api/signer";
-import { cryptoWaitReady, blake2AsHex } from "@polkadot/util-crypto";
+import {
+	cryptoWaitReady,
+	blake2AsHex,
+	mnemonicToMiniSecret,
+	sr25519PairFromSeed,
+	keyExtractSuri,
+	keyFromPath,
+	sr25519Sign,
+	encodeAddress,
+} from "@polkadot/util-crypto";
 import { u8aToHex } from "@polkadot/util";
-import { Keyring } from "@polkadot/keyring";
 import { createPublicClient, http, keccak256, encodeFunctionData } from "viem";
 import { stack_template } from "@polkadot-api/descriptors";
 import { readDeployments } from "./_deployments";
@@ -59,9 +67,29 @@ const medicAuthorityAbi = [
 	},
 ] as const;
 
-function deriveSr25519(path: string) {
-	const keyring = new Keyring({ type: "sr25519", ss58Format: SS58_PREFIX });
-	return keyring.addFromUri(DEV_MNEMONIC + path);
+interface DevKeypair {
+	publicKey: Uint8Array;
+	address: string;
+	sign: (msg: Uint8Array) => Uint8Array;
+}
+
+/**
+ * Derive an sr25519 dev keypair using the top-level @polkadot/util-crypto whose WASM
+ * module is guaranteed initialized by our `cryptoWaitReady()` call. Avoids
+ * @polkadot/keyring, which at v14.0.3 pulls its own nested @polkadot/util-crypto@14
+ * whose WASM never gets initialized in our setup → sign() returns cryptographically
+ * invalid 64-byte output and the node rejects with Invalid(BadProof).
+ */
+function deriveSr25519(path: string): DevKeypair {
+	const miniSecret = mnemonicToMiniSecret(DEV_MNEMONIC);
+	const seed = sr25519PairFromSeed(miniSecret);
+	const { path: junctions } = keyExtractSuri(DEV_MNEMONIC + path);
+	const pair = keyFromPath(seed, junctions, "sr25519");
+	return {
+		publicKey: pair.publicKey,
+		address: encodeAddress(pair.publicKey, SS58_PREFIX),
+		sign: (msg) => sr25519Sign(msg, pair),
+	};
 }
 
 function keccakH160(accountId32: Uint8Array): `0x${string}` {
@@ -157,10 +185,8 @@ async function main() {
 	const { threshold, signatories, ss58: multisigSs58 } = deployments.multisig;
 	const sortedSignatories = [...signatories].sort();
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const alice = deriveSr25519("//Alice") as any;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const bob = deriveSr25519("//Bob") as any;
+	const alice = deriveSr25519("//Alice");
+	const bob = deriveSr25519("//Bob");
 	const aliceSigner = getPolkadotSigner(alice.publicKey, "Sr25519", (m) => alice.sign(m));
 	const bobSigner = getPolkadotSigner(bob.publicKey, "Sr25519", (m) => bob.sign(m));
 
