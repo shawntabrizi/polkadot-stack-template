@@ -30,14 +30,33 @@ export type SubmitResult = {
  * @param signer  A `PolkadotSigner` from `polkadot-api/signer` (e.g. `getPolkadotSigner`).
  * @returns Resolved block hash + events on success; throws on dispatch error.
  */
+export interface SubmitOptions {
+	/** Block to target. Default: "best" (faster on local dev nodes). */
+	at?: "best" | "finalized";
+	/**
+	 * Era mortality. Default: mortal (period 64). Pass `false` for immortal — useful when
+	 * back-to-back submissions from the same signer hit `Invalid { BadProof }`, which can
+	 * happen if PAPI's cached best-block drifts during consecutive signs and the mortal era
+	 * block hash no longer matches what the node expects.
+	 */
+	mortal?: boolean;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function submitExtrinsic(tx: any, signer: PolkadotSigner): Promise<SubmitResult> {
+export async function submitExtrinsic(
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	tx: any,
+	signer: PolkadotSigner,
+	opts: SubmitOptions = {},
+): Promise<SubmitResult> {
 	// signAndSubmit waits for finalization and returns TxFinalizedPayload:
 	//   { txHash, ok, events, block: { hash, number, index }, dispatchError? }
 	// Using `{ at: "best" }` to target the best block instead of finalized —
 	// faster for local dev nodes where finalization may lag.
+	const signOpts: Record<string, unknown> = { at: opts.at ?? "best" };
+	if (opts.mortal === false) signOpts.mortality = { mortal: false };
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const result: any = await tx.signAndSubmit(signer, { at: "best" });
+	const result: any = await tx.signAndSubmit(signer, signOpts);
 
 	if (!result.ok) {
 		const err = result.dispatchError;

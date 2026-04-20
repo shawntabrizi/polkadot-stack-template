@@ -19,6 +19,7 @@
     "deploy-medic-authority:local": "npx hardhat run scripts/deploy-medic-authority.ts --network local",
     "deploy-medic-authority:testnet": "npx hardhat run scripts/deploy-medic-authority.ts --network polkadotTestnet",
     "bootstrap-demo-medic:local": "npx ts-node --transpile-only scripts/bootstrap-demo-medic.ts",
+    "test:multisig-flow": "npx ts-node --transpile-only scripts/test-multisig-flow.ts",
     "fmt": "prettier --write 'contracts/**/*.sol' 'scripts/**/*.ts' 'test/**/*.ts' hardhat.config.ts",
     "fmt:check": "prettier --check 'contracts/**/*.sol' 'scripts/**/*.ts' 'test/**/*.ts' hardhat.config.ts"
   },

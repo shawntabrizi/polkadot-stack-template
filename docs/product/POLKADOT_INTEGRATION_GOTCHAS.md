@@ -363,6 +363,58 @@ template generator would be ideal.
 
 ---
 
+### 12. Back-to-back `signAndSubmit` from the same PAPI client → `Invalid { BadProof }`
+
+**Layer**: PAPI signing / mortal era
+
+**Symptom**: scripts that submit multiple extrinsics from the same keypair in one process
+(e.g. Alice proposes, Bob approves, Alice proposes again — or bootstrap's fund → approve →
+propose sequence) get the first 1–2 submissions through, then fail with `{ type: "Invalid",
+value: { type: "BadProof" } }` on a later submission. Keypair, nonce, and calldata all look
+correct, and re-running the script a moment later usually gets further before failing at a
+similar point. The `addMedic(Alice)` step in `bootstrap-demo-medic.ts` was hitting this
+every run — explains why Alice was silently not being verified after `start-all`.
+
+**Cause**: PAPI's default signing mode is **mortal era, period 64**, and `_papi.ts` signs
+with `{ at: "best" }`. The era block hash is baked into the signed `additionalSigned` bytes.
+On a single-node local chain, the "best" view occasionally drifts between consecutive signs
+(chainHead subscription can briefly report a block that the node later supersedes), so by
+the time the node validates the 2nd/3rd extrinsic, the era block hash no longer matches
+what the node has canonically. The signature is rejected as `BadProof` — not because the
+sr25519 signature itself is wrong, but because the payload the node reconstructs differs
+from the one PAPI signed.
+
+Not a nonce bug (`Invalid { Stale }` would surface instead), not a keyring WASM bug (see
+#9; sigs verify fine in isolation), not a contract/Revive issue — strictly the extrinsic
+extra.
+
+**Fix / workaround**: sign with **immortal era** for back-to-back script submissions.
+`scripts/_papi.ts::submitExtrinsic` accepts an `opts: { mortal?: boolean }` parameter; pass
+`{ mortal: false }` from any caller that issues multiple signs in one process:
+
+```ts
+await submitExtrinsic(tx, signer, { mortal: false });
+```
+
+Immortal era skips the era-block-hash lookup entirely. The trade-off — an immortal tx is
+replayable across the chain's lifetime — is fine for dev scripts but NOT for production /
+end-user signing (Nova Wallet, browser-side patient flows). Production code stays on the
+default mortal era; this workaround is for Node-side automation only.
+
+**Where this bites**:
+- `contracts/pvm/scripts/test-multisig-flow.ts` — the integration test; uses the helper via
+  the module with `{ mortal: false }`. Green end-to-end with 17 assertions.
+- `contracts/pvm/scripts/bootstrap-demo-medic.ts` — same root cause, one-line fix pending.
+  Until it lands, re-running the test or `bootstrap-demo-medic:local` one more time after a
+  failed run still advances the state (whatever was already approved stays approved).
+
+**Upstream improvement**: PAPI's `signAndSubmit` could refetch the best-block reference
+immediately before signing, or fall back to immortal when the user doesn't specify
+mortality. As of polkadot-api@1.x the default is mortal+period-64 and the caller is
+responsible for era management.
+
+---
+
 ## Open questions / things we noticed but didn't chase
 
 - **How to estimate pallet-multisig `max_weight` deterministically**: we tuned by hand. A
