@@ -166,6 +166,26 @@ async function main() {
 
 	const aliceH160 = keccakH160(alice.publicKey);
 
+	// Diagnostic: print both signers' material so we can detect any derivation / signing
+	// weirdness that would explain BadProof on back-to-back asMulti submissions.
+	console.log("-- Signers (diagnostic) --");
+	console.log(`  Alice SS58:      ${alice.address}`);
+	console.log(`  Alice publicKey: ${u8aToHex(alice.publicKey)}`);
+	console.log(`  Bob SS58:        ${bob.address}`);
+	console.log(`  Bob publicKey:   ${u8aToHex(bob.publicKey)}`);
+	// Sanity-check by signing a trivial message with each keypair and verifying the
+	// sig-pubkey pair is well-formed. If sign() throws or returns wrong length, we'd
+	// know the keypair itself is broken.
+	try {
+		const aliceSig = alice.sign(new Uint8Array([1, 2, 3, 4]));
+		const bobSig = bob.sign(new Uint8Array([1, 2, 3, 4]));
+		console.log(`  Alice sig len:   ${aliceSig.length} bytes`);
+		console.log(`  Bob sig len:     ${bobSig.length} bytes`);
+	} catch (e) {
+		console.log(`  [WARN] sign probe failed: ${(e as Error).message}`);
+	}
+	console.log("");
+
 	// Fast path: if Alice is already verified, nothing to do. Lets re-running the script
 	// against a fully-bootstrapped node return instantly instead of re-submitting asMulti
 	// calls that will hit NoTimepoint / stale-state errors.
