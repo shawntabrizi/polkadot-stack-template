@@ -15,7 +15,7 @@ Students do not need to use every part. Components are intentionally separated s
 | FRAME Pallet | `blockchain/pallets/template/` | Rust, FRAME, polkadot-sdk |
 | Parachain Runtime | `blockchain/runtime/` | Rust, Cumulus, pallet-revive |
 | EVM Contract | `contracts/evm/` | Solidity 0.8.28, Hardhat, solc |
-| PVM Contract | `contracts/pvm/` | Solidity 0.8.28, Hardhat, resolc (PolkaVM) |
+| PVM Contract | `contracts/pvm/` | Rust, cargo-pvm-contract, pallet-revive-uapi (PolkaVM) |
 | Frontend | `web/` | React 18, Vite, TypeScript, Tailwind, PAPI, viem |
 | CLI | `cli/` | Rust, subxt, alloy, clap |
 | Scripts | `scripts/` | Bash (start, deploy, test helpers) |
@@ -24,7 +24,7 @@ Students do not need to use every part. Components are intentionally separated s
 
 - The **pallet** is wired into the runtime at `pallet_index(50)` as `TemplatePallet`.
 - **pallet-revive** (index 90) enables both EVM and PVM smart contract execution with Ethereum RPC compatibility.
-- The same `ProofOfExistence.sol` is compiled via **solc** (EVM bytecode) and **resolc** (PolkaVM/RISC-V bytecode).
+- The **PVM contract** (`contracts/pvm/`) is a native Rust contract compiled to PolkaVM (RISC-V) bytecode via `cargo-pvm-contract`. The Solidity interface `DotTransfer.sol` is used only for ABI generation by the proc-macro.
 - The **frontend** talks to the pallet via **PAPI** over WebSocket and to contracts via **viem** through the **eth-rpc** proxy.
 - The **CLI** uses **subxt** for Substrate interactions and **alloy** for Ethereum contract calls.
 - Contract addresses are stored in `deployments.json` (root) and auto-synced to `web/src/config/deployments.ts` by deploy scripts.
@@ -36,7 +36,9 @@ Students do not need to use every part. Components are intentionally separated s
 - `blockchain/runtime/src/lib.rs` — Runtime definition, pallet wiring, runtime APIs
 - `blockchain/runtime/src/configs/mod.rs` — All pallet configuration (System, Balances, Revive, etc.)
 - `blockchain/runtime/src/configs/xcm_config.rs` — XCM cross-chain messaging config
-- `contracts/evm/contracts/ProofOfExistence.sol` — Solidity contract (same source for PVM)
+- `contracts/evm/contracts/ProofOfExistence.sol` — Solidity EVM contract
+- `contracts/pvm/src/dot_transfer.rs` — Rust PVM contract (PolkaVM target, `no_std`)
+- `contracts/pvm/DotTransfer.sol` — Solidity interface used only for ABI generation by `pvm-contract-macros`
 - `web/src/pages/PalletPage.tsx` — Pallet PoE frontend page
 - `web/src/components/ContractProofOfExistencePage.tsx` — Shared EVM/PVM contract page
 - `web/src/config/evm.ts` — Contract ABI, dev accounts, viem client setup
@@ -56,8 +58,8 @@ cargo build --release
 # EVM contracts
 cd contracts/evm && npm ci && npx hardhat compile
 
-# PVM contracts
-cd contracts/pvm && npm ci && npx hardhat compile
+# PVM contracts (Rust → PolkaVM blob + ABI JSON in contracts/pvm/target/)
+cd contracts/pvm && cargo build --release
 
 # Frontend
 cd web && npm ci && npm run build
@@ -75,8 +77,8 @@ SKIP_PALLET_REVIVE_FIXTURES=1 cargo test --workspace --features runtime-benchmar
 # EVM contract tests
 cd contracts/evm && npx hardhat test
 
-# PVM contract tests
-cd contracts/pvm && npx hardhat test
+# PVM contract tests — run against a live local node (no offline test harness yet)
+# Deploy first: cd contracts/pvm && cargo build --release && npm ci && npm run deploy:local
 ```
 
 ## Format & Lint
@@ -94,7 +96,7 @@ cd web && npm run lint          # eslint
 
 # Contracts
 cd contracts/evm && npm run fmt
-cd contracts/pvm && npm run fmt
+cd contracts/pvm && cargo +nightly fmt  # format Rust contract
 ```
 
 ## Docker

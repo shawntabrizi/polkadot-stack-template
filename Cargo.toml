@@ -1,9 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-	"blockchain/runtime",
-	"blockchain/pallets/template",
-	"cli",
+	"contracts/pvm-rust"
 ]
 
 [workspace.package]
@@ -52,8 +50,11 @@ alloy = { version = "1.8", features = ["contract", "provider-http", "signer-loca
 pallet-revive-proc-macro = { git = "https://github.com/paritytech/polkadot-sdk", tag = "polkadot-stable2512-3" }
 
 [profile.release]
-opt-level = 3
-panic = "unwind"
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+overflow-checks = false
 
 [profile.production]
 codegen-units = 1

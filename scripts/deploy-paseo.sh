@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== Deploy Contracts to Polkadot TestNet ==="
+echo "=== Deploy Contracts to Paseo Asset Hub ==="
 echo ""
-echo "Make sure you have set your private key:"
-echo "  cd contracts/pvm && npx hardhat vars set PRIVATE_KEY"
-echo ""
+echo "Required: export PRIVATE_KEY=0x<your-paseo-account-key>"
 echo "Get testnet tokens at: https://faucet.polkadot.io/"
 echo ""
+
+if [[ -z "${PRIVATE_KEY:-}" ]]; then
+	echo "Error: PRIVATE_KEY is not set."
+	exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Deploy EVM contract (solc)
-# echo "[1/2] Deploying ProofOfExistence via EVM (solc)..."
-# cd "$ROOT_DIR/contracts/evm"
-# npm install
-# npx hardhat compile
-# npm run deploy:testnet
-
-# Deploy PVM contract (resolc)
-echo "[2/2] Deploying ProofOfExistence via PVM (resolc)..."
+# Build Rust PVM contract (uses contracts/pvm/.cargo/config.toml for the PolkaVM target)
+echo "[1/2] Building DotTransfer (Rust → PolkaVM)..."
 cd "$ROOT_DIR/contracts/pvm"
-npm install
-npx hardhat compile
-npm run deploy:testnet
+cargo build --release
+echo "      Built: target/dot-transfer.release.polkavm"
+
+# Deploy via viem (reads the .polkavm blob and the generated ABI)
+echo "[2/2] Deploying to Paseo Asset Hub..."
+npm ci --silent
+npm run deploy:paseo
 
 echo ""
 echo "=== Deployment complete ==="

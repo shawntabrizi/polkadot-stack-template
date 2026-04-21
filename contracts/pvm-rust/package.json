@@ -1,0 +1,19 @@
+{
+  "name": "pvm-dot-transfer-rust",
+  "version": "0.1.0",
+  "description": "Rust/PolkaVM DotTransfer contract — deploy scripts only (contract built with cargo)",
+  "engines": {
+    "node": ">=22 <23",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "deploy:local": "ts-node scripts/deploy.ts",
+    "deploy:paseo": "NETWORK=paseo ts-node scripts/deploy.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0",
+    "viem": "^2.0.0"
+  }
+}
