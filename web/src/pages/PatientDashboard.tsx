@@ -77,6 +77,7 @@ export default function PatientDashboard() {
 	const [titleStr, setTitleStr] = useState("");
 	const [priceStr, setPriceStr] = useState("");
 	const [listings, setListings] = useState<Listing[]>([]);
+	const [expandedListings, setExpandedListings] = useState<Set<string>>(new Set());
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 
@@ -642,9 +643,12 @@ export default function PatientDashboard() {
 						{listings.map((listing) => {
 							const hasPendingOrder = listing.pendingOrderId > 0n;
 							const orderIdForFulfill = listing.pendingOrderId - 1n;
-							const hasPackage = !!localStorage.getItem(
+							const pkgJson = localStorage.getItem(
 								`signed-pkg:${ethRpcUrl}:${listing.id}`,
 							);
+							const hasPackage = !!pkgJson;
+							const pkg = pkgJson ? (JSON.parse(pkgJson) as SignedRecord) : null;
+							const isExpanded = expandedListings.has(listing.id.toString());
 							const commitHex = listing.recordCommit.toString(16).padStart(64, "0");
 
 							return (
@@ -691,6 +695,51 @@ export default function PatientDashboard() {
 										</span>{" "}
 										| Listing #{listing.id.toString()}
 									</p>
+
+									<button
+										onClick={() =>
+											setExpandedListings((prev) => {
+												const next = new Set(prev);
+												if (next.has(listing.id.toString()))
+													next.delete(listing.id.toString());
+												else next.add(listing.id.toString());
+												return next;
+											})
+										}
+										className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+									>
+										{isExpanded ? "▲ Hide Record" : "▼ View Record"}
+									</button>
+
+									{isExpanded && (
+										<div className="rounded-md border border-white/[0.04] bg-white/[0.02] p-2">
+											{pkg ? (
+												<table className="w-full text-xs border-collapse">
+													<tbody>
+														{Object.entries(pkg.fieldsPreview).map(
+															([k, v]) => (
+																<tr
+																	key={k}
+																	className="border-b border-white/[0.04] last:border-0"
+																>
+																	<td className="py-1 pr-3 text-text-tertiary font-mono whitespace-nowrap align-top">
+																		{k}
+																	</td>
+																	<td className="py-1 text-text-primary break-all">
+																		{v}
+																	</td>
+																</tr>
+															),
+														)}
+													</tbody>
+												</table>
+											) : (
+												<p className="text-text-muted text-xs">
+													Record data not available in this browser.
+												</p>
+											)}
+										</div>
+									)}
 
 									{listing.active && hasPendingOrder && !hasPackage && (
 										<p className="text-accent-red text-xs">

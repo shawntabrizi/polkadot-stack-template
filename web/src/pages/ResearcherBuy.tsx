@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { type Address, formatEther, encodeFunctionData } from "viem";
+import { type Address, formatEther, parseEther, encodeFunctionData } from "viem";
 import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
 import { filter, firstValueFrom } from "rxjs";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
@@ -56,6 +56,12 @@ interface Order {
 	pkBuyerY: bigint;
 }
 
+interface PendingOffer {
+	orderId: bigint;
+	amount: bigint;
+	researcher: Address;
+}
+
 interface DecryptedRecord {
 	orderId: bigint;
 	fields: Record<string, string>;
@@ -93,6 +99,8 @@ export default function ResearcherBuy() {
 	const [loading, setLoading] = useState(false);
 	const [decryptedRecords, setDecryptedRecords] = useState<Record<string, DecryptedRecord>>({});
 	const [stmtCache, setStmtCache] = useState<Map<string, Uint8Array>>(new Map());
+	const [pendingOffers, setPendingOffers] = useState<Record<string, PendingOffer>>({});
+	const [bidAmounts, setBidAmounts] = useState<Record<string, string>>({});
 
 	// Subscribe to statement store (live in Host, one-shot dump in local dev)
 	useEffect(() => {
@@ -258,6 +266,25 @@ export default function ResearcherBuy() {
 			}
 			setListings(fetchedListings);
 
+			// Fetch the pending offer details for each active listing that has one
+			const offersMap: Record<string, PendingOffer> = {};
+			for (const listing of fetchedListings) {
+				if (listing.pendingOrderId > 0n) {
+					const offerResult = (await client.readContract({
+						address: addr,
+						abi: medicalMarketAbi,
+						functionName: "getOrder",
+						args: [listing.pendingOrderId - 1n],
+					})) as [bigint, string, bigint, boolean, boolean, bigint, bigint];
+					offersMap[listing.id.toString()] = {
+						orderId: listing.pendingOrderId - 1n,
+						amount: offerResult[2],
+						researcher: offerResult[1] as Address,
+					};
+				}
+			}
+			setPendingOffers(offersMap);
+
 			const orderCount = (await client.readContract({
 				address: addr,
 				abi: medicalMarketAbi,
@@ -311,17 +338,19 @@ export default function ResearcherBuy() {
 		}
 	}, [contractAddress, ethRpcUrl, loadAll]);
 
-	async function placeBuyOrder(listing: Listing) {
+	async function placeBuyOrder(listing: Listing, customAmountWei?: bigint) {
 		if (!contractAddress) return;
 		try {
+			const amountWei = customAmountWei ?? listing.price;
 			setTxStatus("Placing order...");
 			const skStorageKey = `phase5-sk-buyer:${currentAccount.evmAddress}:${ethRpcUrl}:${listing.id}`;
 			const { pk } = getOrCreateBuyerKey(skStorageKey);
 			const { txHash } = await reviveCall(
 				"placeBuyOrder",
 				[listing.id, pk.x, pk.y],
-				listing.price,
+				amountWei,
 			);
+			setBidAmounts((prev) => ({ ...prev, [listing.id.toString()]: "" }));
 			setTxStatus(`Buy order placed. Tx: ${txHash}`);
 			loadAll();
 		} catch (e) {
@@ -552,8 +581,15 @@ export default function ResearcherBuy() {
 											</p>
 										</div>
 										{listing.pendingOrderId > 0n ? (
-											<span className="px-2 py-0.5 rounded-full bg-white/[0.04] text-text-muted text-xs font-medium whitespace-nowrap">
-												Pending order
+											<span className="px-2 py-0.5 rounded-full bg-accent-yellow/10 text-accent-yellow text-xs font-medium whitespace-nowrap">
+												Best:{" "}
+												{pendingOffers[listing.id.toString()]?.amount !==
+												undefined
+													? formatEther(
+															pendingOffers[listing.id.toString()]
+																.amount,
+														) + " PAS"
+													: "?"}
 											</span>
 										) : (
 											<button
@@ -596,6 +632,60 @@ export default function ResearcherBuy() {
 											{formatEther(listing.price)} PAS
 										</span>
 									</p>
+									{(() => {
+										const offer = pendingOffers[listing.id.toString()];
+										const isMyOffer =
+											offer &&
+											offer.researcher.toLowerCase() ===
+												currentAccount.evmAddress.toLowerCase();
+										if (listing.pendingOrderId === 0n) return null;
+										if (isMyOffer)
+											return (
+												<p className="text-xs text-accent-yellow">
+													You hold the best offer — cancel it from My
+													Orders below.
+												</p>
+											);
+										return (
+											<div className="flex gap-2 items-center flex-wrap">
+												<input
+													type="text"
+													value={bidAmounts[listing.id.toString()] ?? ""}
+													onChange={(e) =>
+														setBidAmounts((prev) => ({
+															...prev,
+															[listing.id.toString()]: e.target.value,
+														}))
+													}
+													placeholder={`> ${offer ? formatEther(offer.amount) : "?"} PAS`}
+													className="input-field w-28 text-xs py-1"
+												/>
+												<button
+													onClick={() => {
+														const raw =
+															bidAmounts[listing.id.toString()];
+														if (
+															!raw ||
+															isNaN(Number(raw)) ||
+															Number(raw) <= 0
+														)
+															return;
+														placeBuyOrder(listing, parseEther(raw));
+													}}
+													disabled={loading}
+													className="btn-accent text-xs px-3 py-1 whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
+													style={{
+														background:
+															"linear-gradient(135deg, #4cc2ff 0%, #0090d4 100%)",
+														boxShadow:
+															"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
+													}}
+												>
+													{loading ? <Spinner /> : "Outbid"}
+												</button>
+											</div>
+										);
+									})()}
 									<div>
 										<VerifiedBadge address={listing.patient} />
 									</div>

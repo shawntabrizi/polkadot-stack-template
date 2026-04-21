@@ -347,6 +347,97 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		expect(bal).to.equal(0n);
 	});
 
+	it("outbid: higher offer refunds previous bidder and becomes the active offer", async function () {
+		const { market, patient, researcher } = await deployFixture();
+		const publicClient = await hre.viem.getPublicClient();
+		const [, , researcher2] = await hre.viem.getWalletClients();
+
+		await market.write.createListing(
+			[recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS, title, price],
+			{ account: patient.account },
+		);
+
+		// Researcher 1 places the first offer at listing price
+		await market.write.placeBuyOrder([0n, pkBuyerX, pkBuyerY], {
+			account: researcher.account,
+			value: price,
+		});
+		expect(await market.read.getPendingOrderId([0n])).to.equal(1n); // orderId 0, stored as 1
+
+		// Researcher 2 outbids with a higher amount; researcher 1 gets refunded
+		const highBid = price * 2n;
+		const sk2 = deterministicScalar(3);
+		const pk2 = mulPointEscalar(Base8, sk2);
+
+		const r1BalBefore = await publicClient.getBalance({ address: researcher.account.address });
+		await market.write.placeBuyOrder([0n, pk2[0], pk2[1]], {
+			account: researcher2.account,
+			value: highBid,
+		});
+		const r1BalAfter = await publicClient.getBalance({ address: researcher.account.address });
+
+		// Researcher 1 received their refund
+		expect(r1BalAfter - r1BalBefore).to.equal(price);
+
+		// Old order is cancelled, new order is pending
+		const order0 = await market.read.getOrder([0n]);
+		expect(order0[4]).to.equal(true); // order 0 cancelled
+
+		const order1 = await market.read.getOrder([1n]);
+		expect(order1[3]).to.equal(false); // order 1 not confirmed
+		expect(order1[4]).to.equal(false); // order 1 not cancelled
+		expect(order1[2]).to.equal(highBid);
+
+		expect(await market.read.getPendingOrderId([0n])).to.equal(2n); // orderId 1, stored as 2
+
+		// Patient can still fulfill order 1
+		const { ephPk, ciphertextHash } = encryptForBuyer(plaintext, [pk2[0], pk2[1]], 1n, ephSk);
+		await market.write.fulfill([1n, ephPk[0], ephPk[1], ciphertextHash], {
+			account: patient.account,
+		});
+		const order1After = await market.read.getOrder([1n]);
+		expect(order1After[3]).to.equal(true); // confirmed
+	});
+
+	it("outbid: equal or lower amount reverts", async function () {
+		const { market, patient, researcher } = await deployFixture();
+		const [, , researcher2] = await hre.viem.getWalletClients();
+
+		await market.write.createListing(
+			[recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS, title, price],
+			{ account: patient.account },
+		);
+		await market.write.placeBuyOrder([0n, pkBuyerX, pkBuyerY], {
+			account: researcher.account,
+			value: price,
+		});
+
+		const sk2 = deterministicScalar(3);
+		const pk2 = mulPointEscalar(Base8, sk2);
+
+		// Equal amount should revert
+		try {
+			await market.write.placeBuyOrder([0n, pk2[0], pk2[1]], {
+				account: researcher2.account,
+				value: price,
+			});
+			expect.fail("Should have reverted");
+		} catch (e: unknown) {
+			expect((e as Error).message).to.include("Must outbid current offer");
+		}
+
+		// Lower amount should revert
+		try {
+			await market.write.placeBuyOrder([0n, pk2[0], pk2[1]], {
+				account: researcher2.account,
+				value: price - 1n,
+			});
+			expect.fail("Should have reverted");
+		} catch (e: unknown) {
+			expect((e as Error).message).to.match(/Must outbid|Insufficient payment/);
+		}
+	});
+
 	it("cancelListing succeeds before any order, blocked after", async function () {
 		const { market, patient, researcher } = await deployFixture();
 		await market.write.createListing(

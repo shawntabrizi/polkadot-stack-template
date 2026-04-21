@@ -130,14 +130,32 @@ contract MedicalMarket {
 	}
 
 	/// @notice Lock native PAS and register the buyer's BabyJubJub pubkey.
+	///         If a lower offer already exists it is refunded and replaced (outbid).
+	///         State is fully written before the external refund call (CEI pattern).
+	///         NOTE: if the outbid researcher is a contract that reverts on receive,
+	///         the refund call fails and the whole tx reverts — their offer can never
+	///         be outbid (griefing). Pull-payment escrow is the production fix.
 	function placeBuyOrder(uint256 listingId, uint256 pkBuyerX, uint256 pkBuyerY) external payable {
 		require(listingId < listingCount, "Listing does not exist");
 		Listing storage listing = listings[listingId];
 		require(listing.active, "Listing is not active");
-		require(listingPendingOrder[listingId] == 0, "Listing already has a pending order");
 		require(msg.value >= listing.price, "Insufficient payment");
 		require(pkBuyerX != 0 || pkBuyerY != 0, "pkBuyer must be non-zero");
 
+		// Cache refund target before any state mutation.
+		address prevResearcher;
+		uint256 prevAmount;
+		if (listingPendingOrder[listingId] != 0) {
+			uint256 prevOrderId = listingPendingOrder[listingId] - 1;
+			Order storage prev = orders[prevOrderId];
+			require(msg.value > prev.amount, "Must outbid current offer");
+			prevResearcher = prev.researcher;
+			prevAmount = prev.amount;
+			prev.cancelled = true;
+			emit OrderCancelled(prevOrderId, listingId, prevResearcher, prevAmount);
+		}
+
+		// Write all state before any external call (CEI).
 		uint256 orderId = orderCount;
 		orders[orderId] = Order({
 			listingId: listingId,
@@ -151,6 +169,12 @@ contract MedicalMarket {
 		orderCount++;
 		listingPendingOrder[listingId] = orderId + 1;
 		emit OrderPlaced(listingId, orderId, msg.sender, msg.value, pkBuyerX, pkBuyerY);
+
+		// External call last — consistent with fulfill() and cancelOrder().
+		if (prevResearcher != address(0)) {
+			(bool ok, ) = payable(prevResearcher).call{value: prevAmount}("");
+			require(ok, "Refund to previous bidder failed");
+		}
 	}
 
 	/// @notice Patient declares the ephemeral pk + Statement Store ciphertext

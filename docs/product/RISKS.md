@@ -76,6 +76,32 @@ property). Revisit BBS+ for V2 when PSE tooling matures.
 
 ---
 
+### T2d: Outbid Griefing — Pull Payment Not Implemented
+
+**Risk**: A researcher places an offer using a smart contract whose `receive()` / fallback
+deliberately reverts. When a new researcher tries to outbid, the contract attempts to refund
+the malicious bidder via `call{value: ...}("")`, which reverts, rolling back the entire
+`placeBuyOrder` transaction. The listing is permanently locked with the malicious offer — no
+one can outbid, the patient cannot cancel (pending order blocks it), and the marketplace entry
+is bricked.
+
+**Likelihood**: Low for MVP — all current researcher accounts are EOAs (dev accounts, Nova
+Wallet). A contract-based bidder requires deliberate effort.
+
+**Severity**: Medium — the affected listing is permanently bricked; the protocol itself is not
+at risk and other listings continue to function normally.
+
+**Current state**: `MedicalMarket.sol` uses CEI (checks-effects-interactions) order — all
+state is written before the external refund call — but the `require(ok, ...)` on the refund
+still allows griefing if `ok == false`.
+
+**Fix for production (Phase 5.3)**: Replace the push-payment refund with a **pull payment**:
+store `pendingWithdrawals[prevResearcher] += prevAmount` and add a `withdraw()` function.
+The outbid succeeds regardless of whether the old bidder can receive ETH; they claim the
+refund separately. This is the standard Solidity pattern for griefing-resistant refunds.
+
+---
+
 ### T3: PVM / resolc Immaturity
 
 **Risk**: The `resolc` compiler or `pallet-revive` has bugs that cause contract misbehavior on PVM
@@ -284,6 +310,7 @@ fraud depends on medic collusion.
 |---|---|---|---|
 | T1 Circuit soundness bug | Low | Critical | Yes — audit required |
 | T2 Contract vulnerability | Moderate | High | Yes — audit required |
+| T2d Outbid griefing (pull payment missing) | Low (EOA-only MVP) | Medium | No — fix in Phase 5.3 |
 | T3 PVM/resolc immaturity | Moderate | Medium | No — testnet only |
 | T4 Patient key loss | High | High (user) | No — UX mitigation sufficient |
 | R1 GDPR erasure | Certain (EU) | High | Yes — legal opinion required |
