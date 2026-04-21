@@ -19,7 +19,7 @@ import { getStackTemplateDescriptor } from "../hooks/useConnection";
 import { useChainStore } from "../store/chainStore";
 import { formatDispatchError } from "../utils/format";
 import FileDropZone from "../components/FileDropZone";
-import { type SignedRecord, encryptRecordForBuyer } from "../utils/zk";
+import { type SignedRecord, type MedicalHeader, encryptRecordForBuyer } from "../utils/zk";
 
 // Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
 const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
@@ -31,13 +31,14 @@ const WEI_TO_PLANCK = 1_000_000n;
 
 interface Listing {
 	id: bigint;
-	recordCommit: bigint;
+	header: MedicalHeader;
+	headerCommit: bigint;
+	bodyCommit: bigint;
 	medicPkX: bigint;
 	medicPkY: bigint;
 	sigR8x: bigint;
 	sigR8y: bigint;
 	sigS: bigint;
-	title: string;
 	price: bigint;
 	patient: string;
 	active: boolean;
@@ -60,6 +61,14 @@ function hexToBytes(hex: string): Uint8Array {
 	return out;
 }
 
+function formatRecordedAt(unixSeconds: number): string {
+	return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+	});
+}
+
 export default function PatientDashboard() {
 	const ethRpcUrl = useChainStore((s) => s.ethRpcUrl);
 	const wsUrl = useChainStore((s) => s.wsUrl);
@@ -74,14 +83,12 @@ export default function PatientDashboard() {
 	const [importedPackage, setImportedPackage] = useState<SignedRecord | null>(null);
 	const [packageParseError, setPackageParseError] = useState<string | null>(null);
 	const [statementStoreAvailable, setStatementStoreAvailable] = useState<boolean | null>(null);
-	const [titleStr, setTitleStr] = useState("");
 	const [priceStr, setPriceStr] = useState("");
 	const [listings, setListings] = useState<Listing[]>([]);
 	const [expandedListings, setExpandedListings] = useState<Set<string>>(new Set());
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 
-	// Load accounts: Nova Wallet → browser extension → dev fallback
 	useEffect(() => {
 		getAccountsWithFallback()
 			.then(setAccounts)
@@ -115,16 +122,19 @@ export default function PatientDashboard() {
 				typeof json === "object" &&
 				json !== null &&
 				"version" in json &&
-				(json as Record<string, unknown>).version === "v2-record" &&
+				(json as Record<string, unknown>).version === "v3-record" &&
+				"header" in json &&
+				"body" in json &&
+				"headerCommit" in json &&
+				"bodyCommit" in json &&
 				"recordCommit" in json &&
-				"plaintext" in json &&
 				"signature" in json
 			) {
 				setImportedPackage(json as SignedRecord);
 			} else {
 				setImportedPackage(null);
 				setPackageParseError(
-					"Not a valid v2 signed record. Use the Medic Signing Tool to produce one.",
+					"Not a valid v3 signed record. Use the Medic Signing Tool to produce one.",
 				);
 			}
 		} catch {
@@ -135,16 +145,6 @@ export default function PatientDashboard() {
 
 	const currentAccount = accounts[selectedAccountIndex] ?? accounts[0];
 
-	// Fetch listings when contract, RPC, or the connected account changes.
-	// Previously this effect omitted currentAccount.evmAddress from its deps
-	// (and suppressed the ESLint warning) — which meant the initial fetch used
-	// the `devAccounts[0]` (Alice) fallback's evmAddress. After async
-	// getAccountsWithFallback() resolved to the real wallet account, `listings`
-	// state was never refreshed, so users saw Alice's listings instead of their
-	// own. loadListings is not useCallback-memoized so we depend on the input
-	// that loadListings's filter closes over (currentAccount.evmAddress) and
-	// accept the ESLint warning — depending on loadListings itself would cause
-	// an infinite loop.
 	useEffect(() => {
 		if (contractAddress) {
 			loadListings();
@@ -181,8 +181,6 @@ export default function PatientDashboard() {
 		const descriptor = await getStackTemplateDescriptor();
 		const api = client.getTypedApi(descriptor);
 
-		// pallet-revive requires an AccountId32 ↔ H160 mapping before a contract call.
-		// Dev accounts are pre-mapped via deployment; Nova Wallet accounts are not.
 		const h160 = new FixedSizeBinary(
 			hexToBytes(currentAccount.evmAddress),
 		) as FixedSizeBinary<20>;
@@ -201,8 +199,6 @@ export default function PatientDashboard() {
 			);
 		}
 
-		// Resolve on best-chain inclusion rather than finalization — signAndSubmit waits
-		// for GRANDPA which can hang indefinitely if the WS subscription drops.
 		const result = await firstValueFrom(
 			api.tx.Revive.call({
 				dest: new FixedSizeBinary(hexToBytes(contractAddress)) as FixedSizeBinary<20>,
@@ -254,8 +250,8 @@ export default function PatientDashboard() {
 
 			const result: Listing[] = [];
 			for (let i = 0n; i < count; i++) {
-				// getListing returns: recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS,
-				//                     title, price, patient, active
+				// getListing returns: headerCommit, bodyCommit, medicPkX, medicPkY,
+				//                     sigR8x, sigR8y, sigS, price, patient, active
 				const rawTuple = (await client.readContract({
 					address: addr,
 					abi: medicalMarketAbi,
@@ -268,26 +264,40 @@ export default function PatientDashboard() {
 					bigint,
 					bigint,
 					bigint,
-					string,
+					bigint,
 					bigint,
 					string,
 					boolean,
 				];
 
 				const [
-					recordCommit,
+					headerCommit,
+					bodyCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
 					sigR8y,
 					sigS,
-					title,
 					price,
 					patient,
 					active,
 				] = rawTuple;
 
 				if (patient.toLowerCase() !== currentAccount.evmAddress.toLowerCase()) continue;
+
+				const headerTuple = (await client.readContract({
+					address: addr,
+					abi: medicalMarketAbi,
+					functionName: "getListingHeader",
+					args: [i],
+				})) as readonly [string, string, bigint, string];
+
+				const header: MedicalHeader = {
+					title: headerTuple[0],
+					recordType: headerTuple[1],
+					recordedAt: Number(headerTuple[2]),
+					facility: headerTuple[3],
+				};
 
 				const pendingOrderId = await client.readContract({
 					address: addr,
@@ -298,13 +308,14 @@ export default function PatientDashboard() {
 
 				result.push({
 					id: i,
-					recordCommit,
+					header,
+					headerCommit,
+					bodyCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
 					sigR8y,
 					sigS,
-					title,
 					price,
 					patient,
 					active,
@@ -328,10 +339,6 @@ export default function PatientDashboard() {
 			setTxStatus("Error: Drop a medic-signed record first");
 			return;
 		}
-		if (!titleStr.trim()) {
-			setTxStatus("Error: Enter a title for the listing");
-			return;
-		}
 		if (!priceStr || isNaN(Number(priceStr)) || Number(priceStr) <= 0) {
 			setTxStatus("Error: Enter a valid price in PAS");
 			return;
@@ -341,21 +348,29 @@ export default function PatientDashboard() {
 			if (!(await verifyContract())) return;
 
 			setTxStatus("Creating listing on-chain...");
-			const recordCommit = BigInt(importedPackage.recordCommit);
+			const headerCommit = BigInt(importedPackage.headerCommit);
+			const bodyCommit = BigInt(importedPackage.bodyCommit);
 			const medicPkX = BigInt(importedPackage.medicPublicKey.x);
 			const medicPkY = BigInt(importedPackage.medicPublicKey.y);
 			const sigR8x = BigInt(importedPackage.signature.R8x);
 			const sigR8y = BigInt(importedPackage.signature.R8y);
 			const sigS = BigInt(importedPackage.signature.S);
 			const priceWei = parseEther(priceStr);
+			const headerInput = {
+				title: importedPackage.header.title,
+				recordType: importedPackage.header.recordType,
+				recordedAt: BigInt(importedPackage.header.recordedAt),
+				facility: importedPackage.header.facility,
+			};
 			const { txHash } = await reviveCall("createListing", [
-				recordCommit,
+				headerInput,
+				headerCommit,
+				bodyCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
 				sigR8y,
 				sigS,
-				titleStr.trim(),
 				priceWei,
 			]);
 			setTxStatus(`Transaction submitted: ${txHash}`);
@@ -375,7 +390,6 @@ export default function PatientDashboard() {
 			setTxStatus("Listing created! Come back here when a researcher places a buy order.");
 			setFileBytes(null);
 			setImportedPackage(null);
-			setTitleStr("");
 			setPriceStr("");
 			loadListings();
 		} catch (e) {
@@ -402,7 +416,6 @@ export default function PatientDashboard() {
 			}
 			const pkg = JSON.parse(pkgJson) as SignedRecord;
 
-			// 1. Read order's pkBuyer.
 			const order = (await getPublicClient(ethRpcUrl).readContract({
 				address: contractAddress as Address,
 				abi: medicalMarketAbi,
@@ -411,25 +424,18 @@ export default function PatientDashboard() {
 			})) as unknown as readonly [bigint, string, bigint, boolean, boolean, bigint, bigint];
 			const pkBuyer = { x: order[5], y: order[6] };
 
-			// 2. Encrypt off-chain for buyer (ECDH + Poseidon stream cipher).
 			setTxStatus("Encrypting record for buyer…");
 			const { ephPk, ciphertextBytes } = encryptRecordForBuyer({
-				plaintext: pkg.plaintext.map(BigInt),
+				plaintext: pkg.body.map(BigInt),
 				pkBuyer,
 				nonce: orderId,
 			});
 
-			// Use blake2b(ciphertextBytes, 32) as the on-chain ciphertextHash so
-			// it doubles as the Statement Store lookup key (the SDK keys its
-			// cache by blake2b of the data payload). The hash also serves as
-			// the on-chain commitment to the bytes uploaded off-chain.
 			const ciphertextHash32 = blake2b(ciphertextBytes, undefined, 32);
 			let ciphertextHashBig = 0n;
 			for (const b of ciphertextHash32)
 				ciphertextHashBig = (ciphertextHashBig << 8n) | BigInt(b);
 
-			// 3. Upload ciphertext to Statement Store. Abort if rejected — the
-			//    buyer can't decrypt without it, so we don't release payment.
 			setTxStatus("Uploading ciphertext to Statement Store…");
 			const stmtSigner = currentAccount.localSigner;
 			await submitStatement(
@@ -441,8 +447,6 @@ export default function PatientDashboard() {
 				stmtSigner?.signBytes,
 			);
 
-			// 4. Submit fulfill on-chain — releases payment, stores (ephPk,
-			//    ciphertextHash) so the buyer can fetch + decrypt.
 			setTxStatus("Submitting fulfill on-chain…");
 			const { txHash } = await reviveCall("fulfill", [
 				orderId,
@@ -475,13 +479,14 @@ export default function PatientDashboard() {
 			<div className="space-y-2">
 				<h1 className="page-title text-polka-500">Patient Dashboard</h1>
 				<p className="text-text-secondary">
-					List medic-signed records for sale. When a researcher pays, you encrypt the
-					record for their public key and deliver it via the Statement Store. The buyer
-					verifies the medic signature + record commitment off-chain after decryption.
+					List medic-signed records for sale. The medic's header (title, type, date,
+					facility) goes on-chain in the clear so researchers can filter listings; the
+					body is encrypted at fulfillment time and delivered through the Statement Store.
+					The buyer verifies both the medic signature and the body commitment off-chain
+					after decryption.
 				</p>
 			</div>
 
-			{/* Statement Store banner */}
 			{statementStoreAvailable === false && (
 				<div className="rounded-lg border border-accent-red/30 bg-accent-red/[0.06] px-4 py-3 text-sm text-accent-red">
 					Statement Store unavailable — start the local node. Fulfillment is disabled
@@ -489,7 +494,6 @@ export default function PatientDashboard() {
 				</div>
 			)}
 
-			{/* Contract + Account Setup */}
 			<div className="card space-y-4">
 				<h2 className="section-title">Contract Setup</h2>
 
@@ -530,14 +534,13 @@ export default function PatientDashboard() {
 				</div>
 			</div>
 
-			{/* Create Listing */}
 			<div className="card space-y-4">
 				<h2 className="section-title">Create Listing</h2>
 				<p className="text-text-muted text-xs">
-					Drop a v2 medic-signed record (downloaded from the Medic Signing Tool). The
-					record commitment, medic public key, and signature are published with the
-					listing so researchers can verify the medic before paying. The encrypted payload
-					is uploaded at fulfillment time — nothing is uploaded now.
+					Drop a v3 medic-signed record (downloaded from the Medic Signing Tool). Title,
+					record type, date, and facility come from the medic-signed header and go
+					on-chain as-is. The encrypted body is uploaded at fulfillment — nothing is
+					uploaded now.
 				</p>
 
 				<FileDropZone
@@ -557,33 +560,26 @@ export default function PatientDashboard() {
 				)}
 
 				{importedPackage && (
-					<div className="rounded-lg border border-accent-green/20 bg-accent-green/[0.04] p-3 space-y-1 text-xs">
+					<div className="rounded-lg border border-accent-green/20 bg-accent-green/[0.04] p-3 space-y-1.5 text-xs">
 						<p className="text-accent-green font-medium">Signed record loaded</p>
-						<p className="text-text-secondary font-mono break-all">
-							Commit:{" "}
-							{BigInt(importedPackage.recordCommit)
-								.toString(16)
-								.padStart(64, "0")
-								.slice(0, 18)}
-							…
-						</p>
+						<div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-text-secondary">
+							<span className="text-text-tertiary">Title</span>
+							<span className="text-text-primary">
+								{importedPackage.header.title}
+							</span>
+							<span className="text-text-tertiary">Type</span>
+							<span>{importedPackage.header.recordType}</span>
+							<span className="text-text-tertiary">Date</span>
+							<span>{formatRecordedAt(importedPackage.header.recordedAt)}</span>
+							<span className="text-text-tertiary">Facility</span>
+							<span>{importedPackage.header.facility}</span>
+						</div>
 						<p className="text-text-muted">
-							{Object.keys(importedPackage.fieldsPreview).length} fields · signed{" "}
-							{new Date(importedPackage.signedAt).toLocaleString()}
+							{Object.keys(importedPackage.bodyFieldsPreview).length} body fields ·
+							signed {new Date(importedPackage.signedAt).toLocaleString()}
 						</p>
 					</div>
 				)}
-
-				<div>
-					<label className="label">Title</label>
-					<input
-						type="text"
-						value={titleStr}
-						onChange={(e) => setTitleStr(e.target.value)}
-						placeholder="e.g. Type 2 Diabetes Cohort — HbA1c + BMI"
-						className="input-field w-full"
-					/>
-				</div>
 
 				<div>
 					<label className="label">Price (PAS)</label>
@@ -621,7 +617,6 @@ export default function PatientDashboard() {
 				<Toast message={txStatus} onClose={() => setTxStatus(null)} />
 			</div>
 
-			{/* My Listings */}
 			<div className="card space-y-4">
 				<div className="flex items-center justify-between">
 					<h2 className="section-title">My Listings</h2>
@@ -649,7 +644,7 @@ export default function PatientDashboard() {
 							const hasPackage = !!pkgJson;
 							const pkg = pkgJson ? (JSON.parse(pkgJson) as SignedRecord) : null;
 							const isExpanded = expandedListings.has(listing.id.toString());
-							const commitHex = listing.recordCommit.toString(16).padStart(64, "0");
+							const commitHex = listing.bodyCommit.toString(16).padStart(64, "0");
 
 							return (
 								<div
@@ -659,9 +654,21 @@ export default function PatientDashboard() {
 									<div className="flex items-center justify-between gap-2">
 										<div>
 											<p className="text-text-primary font-medium text-sm">
-												{listing.title}
+												{listing.header.title}
 											</p>
-											<p className="font-mono text-xs text-text-muted mt-0.5">
+											<div className="flex flex-wrap gap-1.5 mt-1 text-[10px]">
+												<span className="px-1.5 py-0.5 rounded bg-polka-500/10 text-polka-400 font-medium">
+													{listing.header.recordType}
+												</span>
+												<span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-text-tertiary">
+													{formatRecordedAt(listing.header.recordedAt)}
+												</span>
+												<span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-text-tertiary">
+													{listing.header.facility}
+												</span>
+											</div>
+											<p className="font-mono text-xs text-text-muted mt-1">
+												body{" "}
 												{bytesToHex(hexToBytes(commitHex)).slice(0, 18)}…
 												{commitHex.slice(-8)}
 											</p>
@@ -716,7 +723,7 @@ export default function PatientDashboard() {
 											{pkg ? (
 												<table className="w-full text-xs border-collapse">
 													<tbody>
-														{Object.entries(pkg.fieldsPreview).map(
+														{Object.entries(pkg.bodyFieldsPreview).map(
 															([k, v]) => (
 																<tr
 																	key={k}

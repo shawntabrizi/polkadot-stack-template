@@ -283,35 +283,34 @@ Mitigations, roughly ordered by cost:
 - **Researcher anonymity → throwaway addresses** (cheap) or stealth
   addresses (moderate). Same pattern.
 
-### Field-level PII exposure (Phase 5.2 — "Header/Body Split")
+### Header/Body Split — shipped in Phase 5.2 (browsable metadata variant)
 
-Phase 5.1 encrypts the *entire* medic-signed record for the buyer. Any
-PII fields the medic included — `name`, `dob`, `nationalId`, `address` —
-are visible to the researcher after decryption.
+The original Phase 5.2 sketch below was about hiding PII fields from
+researchers. What actually shipped is a related but different split:
+the header carries **medic-signed, publicly browsable metadata** (title,
+recordType, recordedAt, facility) so researchers can filter listings by
+attested fields before paying, and the body carries the encrypted
+clinical payload exactly as before.
 
-**Decision (2026-04-19)**: ship Phase 5.1 with full-record delivery; fix
-field-level PII exposure in Phase 5.2 rather than expanding the current
-scope.
+Shipped shape:
 
-Phase 5.2 shape (sketched here for continuity; full plan lives in its
-own doc when we pick it up):
+- Medic signs `Poseidon2(headerCommit, bodyCommit)` where
+  `headerCommit = Poseidon8(encodeHeader(header))` over an 8-slot
+  canonicalization of the four typed header fields, and `bodyCommit`
+  is the existing Poseidon-chain over the 32-slot body plaintext.
+- On-chain `Listing` stores header fields in the clear + both commits +
+  medic pk + signature. No on-chain Poseidon verification — the buyer
+  recomputes `headerCommit` in the browser and verifies the medic sig
+  over the combined commit before placing an order. A mismatch renders
+  `✗ unverified` on the listing card and disables the buy button.
+- Body-side flow unchanged from 5.1: encrypt for the buyer's BabyJubJub
+  pubkey at fulfill time, upload ciphertext to Statement Store, buyer
+  recomputes `bodyCommit` post-decrypt.
 
-- At sign time, medic tags each field as `header` (PII) or `body`
-  (clinical). Encoder produces two plaintext arrays and two Poseidon
-  chains: `headerCommit` and `bodyCommit`.
-- Medic signs a **combined commit** `Poseidon(headerCommit, bodyCommit)`
-  — this anchors the fact that both halves belong to the same record
-  without forcing either half to be disclosed.
-- **Research listing** sets `listing.recordCommit = bodyCommit`. The
-  circuit takes the combined commit as a private input, re-derives it
-  from `Poseidon(headerCommit, bodyCommit)` internally (medic EdDSA is
-  checked against the combined commit), but only `bodyCommit` equals
-  the listing's public commit. Only body fields are encrypted to the
-  buyer; header never enters the ciphertext.
-- **Medic-share listing** (later) uses a different contract entry
-  point that accepts the combined commit and encrypts both halves.
-- Cost in the circuit: one extra `Poseidon(2)`, one extra private
-  input, a conditional on encryption length. Negligible constraints.
+Field-level PII exposure (the original 5.2 concern) is **not** solved by
+the shipped split — if the medic includes PII in the body, researchers
+still see it after decryption. A future increment can add a separate
+encrypted-PII compartment on top of this split.
 
 ### Availability of the ciphertext (Phase 5.3 — "Escrow Window")
 

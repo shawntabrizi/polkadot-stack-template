@@ -1,19 +1,20 @@
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
 import { expect } from "chai";
 import hre from "hardhat";
-import { poseidon2, poseidon4, poseidon16 } from "poseidon-lite";
+import { poseidon2, poseidon4, poseidon8, poseidon16 } from "poseidon-lite";
 import { mulPointEscalar, Base8, order as jubOrder } from "@zk-kit/baby-jubjub";
 
-// Phase 5.2 — no Groth16 verifier on-chain. The ciphertext is produced off-chain
-// using the same ECDH+Poseidon construction the browser uses; the contract is a
-// pure escrow + signal. The "researcher decrypt" simulation here mirrors what
-// ResearcherBuy.tsx does after fetching the ciphertext from the Statement Store.
+// Phase 5.2 — record split into a public medic-signed header and an encrypted
+// body. The contract stores both commits but does NOT verify Poseidon on-chain;
+// verification is off-chain in the buyer UI. These tests exercise the contract
+// shape and the off-chain verification path that ResearcherBuy.tsx mirrors.
 
 const BN254_R = BigInt(
 	"21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 const SUB_ORDER = jubOrder >> 3n;
 const N = 32;
+const HEADER_N = 8;
 const BYTES_PER_SLOT = 31;
 const RS = 0x1e;
 const US = 0x1f;
@@ -33,7 +34,7 @@ function bigintToBytes(n: bigint, len: number): Uint8Array {
 	return out;
 }
 
-function encodeRecord(fields: Record<string, string>): bigint[] {
+function encodeFieldsFixed(fields: Record<string, string>, slotCount: number): bigint[] {
 	const keys = Object.keys(fields).sort();
 	const enc = new TextEncoder();
 	const parts: Uint8Array[] = [];
@@ -50,9 +51,9 @@ function encodeRecord(fields: Record<string, string>): bigint[] {
 		bytes.set(p, o);
 		o += p.length;
 	}
-	const plaintext: bigint[] = new Array(N).fill(0n);
+	const plaintext: bigint[] = new Array(slotCount).fill(0n);
 	plaintext[0] = BigInt(totalLen);
-	for (let i = 0; i < N - 1; i++) {
+	for (let i = 0; i < slotCount - 1; i++) {
 		const start = i * BYTES_PER_SLOT;
 		if (start >= totalLen) break;
 		const end = Math.min(start + BYTES_PER_SLOT, totalLen);
@@ -61,7 +62,23 @@ function encodeRecord(fields: Record<string, string>): bigint[] {
 	return plaintext;
 }
 
-function decodeRecord(plaintext: bigint[]): Record<string, string> {
+function encodeBody(fields: Record<string, string>): bigint[] {
+	return encodeFieldsFixed(fields, N);
+}
+
+function encodeHeader(header: Header): bigint[] {
+	return encodeFieldsFixed(
+		{
+			title: header.title,
+			recordType: header.recordType,
+			recordedAt: String(header.recordedAt),
+			facility: header.facility,
+		},
+		HEADER_N,
+	);
+}
+
+function decodeBody(plaintext: bigint[]): Record<string, string> {
 	const totalLen = Number(plaintext[0]);
 	const bytes = new Uint8Array(totalLen);
 	let remaining = totalLen;
@@ -90,6 +107,21 @@ function hashChain32(inputs: bigint[]): bigint {
 	const h1 = poseidon16(inputs.slice(0, 16));
 	const h2 = poseidon16(inputs.slice(16, 32));
 	return poseidon2([h1, h2]);
+}
+
+function hashChain8(inputs: bigint[]): bigint {
+	return poseidon8(inputs);
+}
+
+interface Header {
+	title: string;
+	recordType: string;
+	recordedAt: bigint;
+	facility: string;
+}
+
+function headerTuple(h: Header): [string, string, bigint, string] {
+	return [h.title, h.recordType, h.recordedAt, h.facility];
 }
 
 function deterministicScalar(seed: number): bigint {
@@ -126,11 +158,16 @@ function decryptForBuyer(
 		(c, i) =>
 			(c - poseidon4([sharedPoint[0], sharedPoint[1], nonce, BigInt(i)]) + BN254_R) % BN254_R,
 	);
-	return decodeRecord(plaintext);
+	return decodeBody(plaintext);
 }
 
 describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function () {
-	const title = "Blood Panel Q1 2025";
+	const header: Header = {
+		title: "Blood Panel Q1 2025",
+		recordType: "CBC",
+		recordedAt: 1_711_987_200n, // 2024-04-01
+		facility: "Clinica Polyclinic — BA",
+	};
 	const price = 1_000_000n;
 	const exampleRecord: Record<string, string> = {
 		patientId: "PAT-2024-0047",
@@ -138,8 +175,12 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		hba1c: "7.4",
 		country: "FI",
 	};
-	const plaintext = encodeRecord(exampleRecord);
-	const recordCommit = hashChain32(plaintext);
+	const plaintext = encodeBody(exampleRecord);
+	const bodyCommit = hashChain32(plaintext);
+	const headerCommit = hashChain8(encodeHeader(header));
+	// recordCommit is what the medic signs off-chain (verified in the UI).
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	const _recordCommitForSigning = poseidon2([headerCommit, bodyCommit]);
 	// Dummy non-zero medic sig values — the contract only enforces non-zero,
 	// not signature validity. Real signatures are produced by MedicSign.tsx
 	// using @zk-kit/eddsa-poseidon and verified off-chain by the buyer.
@@ -166,7 +207,17 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		const ctx = await deployFixture();
 		const { market, patient, researcher } = ctx;
 		await market.write.createListing(
-			[recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS, title, price],
+			[
+				headerTuple(header),
+				headerCommit,
+				bodyCommit,
+				medicPkX,
+				medicPkY,
+				sigR8x,
+				sigR8y,
+				sigS,
+				price,
+			],
 			{ account: patient.account },
 		);
 		await market.write.placeBuyOrder([0n, pkBuyerX, pkBuyerY], {
@@ -201,11 +252,17 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		expect(fulfillment[2]).to.equal(ciphertextHash);
 
 		const listing = await market.read.getListing([0n]);
-		expect(listing[0]).to.equal(recordCommit);
-		expect(listing[1]).to.equal(medicPkX);
-		expect(listing[2]).to.equal(medicPkY);
-		expect(listing[3]).to.equal(sigR8x);
+		expect(listing[0]).to.equal(headerCommit);
+		expect(listing[1]).to.equal(bodyCommit);
+		expect(listing[2]).to.equal(medicPkX);
+		expect(listing[3]).to.equal(medicPkY);
 		expect(listing[9]).to.equal(false); // active flipped off
+
+		const onchainHeader = await market.read.getListingHeader([0n]);
+		expect(onchainHeader[0]).to.equal(header.title);
+		expect(onchainHeader[1]).to.equal(header.recordType);
+		expect(onchainHeader[2]).to.equal(header.recordedAt);
+		expect(onchainHeader[3]).to.equal(header.facility);
 
 		const bal = await publicClient.getBalance({ address: market.address });
 		expect(bal).to.equal(0n);
@@ -221,7 +278,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		expect(recovered).to.deep.equal(exampleRecord);
 	});
 
-	it("recordCommit recomputed from decrypted plaintext matches the listing", async function () {
+	it("bodyCommit recomputed from decrypted plaintext matches the listing", async function () {
 		// This is the off-chain check that buyers MUST perform after decrypt to
 		// detect a dishonest patient who uploaded garbage to the Statement Store.
 		const { market, patient } = await loadFixture(deployWithOrder);
@@ -244,8 +301,114 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				(c - poseidon4([sharedPoint[0], sharedPoint[1], orderId, BigInt(i)]) + BN254_R) %
 				BN254_R,
 		);
-		const recomputedCommit = hashChain32(recoveredPlaintext);
-		expect(recomputedCommit).to.equal(listing[0]);
+		const recomputedBodyCommit = hashChain32(recoveredPlaintext);
+		expect(recomputedBodyCommit).to.equal(listing[1]);
+	});
+
+	it("headerCommit recomputed from on-chain fields matches the listing", async function () {
+		// This is the pre-purchase UI check: buyer reads header fields from chain,
+		// recomputes Poseidon(headerFields), compares to listing.headerCommit, and
+		// only then verifies the medic sig over Poseidon2(headerCommit, bodyCommit).
+		const { market } = await loadFixture(deployWithOrder);
+		const listing = await market.read.getListing([0n]);
+		const onchainHeader = await market.read.getListingHeader([0n]);
+		const recomputed = hashChain8(
+			encodeHeader({
+				title: onchainHeader[0],
+				recordType: onchainHeader[1],
+				recordedAt: onchainHeader[2],
+				facility: onchainHeader[3],
+			}),
+		);
+		expect(recomputed).to.equal(listing[0]);
+	});
+
+	it("createListing reverts when title is empty", async function () {
+		const { market, patient } = await deployFixture();
+		try {
+			await market.write.createListing(
+				[
+					headerTuple({ ...header, title: "" }),
+					headerCommit,
+					bodyCommit,
+					medicPkX,
+					medicPkY,
+					sigR8x,
+					sigR8y,
+					sigS,
+					price,
+				],
+				{ account: patient.account },
+			);
+			expect.fail("Should have reverted");
+		} catch (e: unknown) {
+			expect((e as Error).message).to.include("Title cannot be empty");
+		}
+	});
+
+	it("createListing reverts when recordType is empty", async function () {
+		const { market, patient } = await deployFixture();
+		try {
+			await market.write.createListing(
+				[
+					headerTuple({ ...header, recordType: "" }),
+					headerCommit,
+					bodyCommit,
+					medicPkX,
+					medicPkY,
+					sigR8x,
+					sigR8y,
+					sigS,
+					price,
+				],
+				{ account: patient.account },
+			);
+			expect.fail("Should have reverted");
+		} catch (e: unknown) {
+			expect((e as Error).message).to.include("recordType cannot be empty");
+		}
+	});
+
+	it("createListing reverts when headerCommit or bodyCommit is zero", async function () {
+		const { market, patient } = await deployFixture();
+		try {
+			await market.write.createListing(
+				[
+					headerTuple(header),
+					0n,
+					bodyCommit,
+					medicPkX,
+					medicPkY,
+					sigR8x,
+					sigR8y,
+					sigS,
+					price,
+				],
+				{ account: patient.account },
+			);
+			expect.fail("Should have reverted on zero headerCommit");
+		} catch (e: unknown) {
+			expect((e as Error).message).to.include("headerCommit must be non-zero");
+		}
+		try {
+			await market.write.createListing(
+				[
+					headerTuple(header),
+					headerCommit,
+					0n,
+					medicPkX,
+					medicPkY,
+					sigR8x,
+					sigR8y,
+					sigS,
+					price,
+				],
+				{ account: patient.account },
+			);
+			expect.fail("Should have reverted on zero bodyCommit");
+		} catch (e: unknown) {
+			expect((e as Error).message).to.include("bodyCommit must be non-zero");
+		}
 	});
 
 	it("fulfill reverts when caller is not the patient", async function () {
@@ -323,7 +486,17 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 	it("placeBuyOrder reverts on insufficient payment", async function () {
 		const { market, patient, researcher } = await deployFixture();
 		await market.write.createListing(
-			[recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS, title, price],
+			[
+				headerTuple(header),
+				headerCommit,
+				bodyCommit,
+				medicPkX,
+				medicPkY,
+				sigR8x,
+				sigR8y,
+				sigS,
+				price,
+			],
 			{ account: patient.account },
 		);
 		try {
@@ -353,7 +526,17 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		const [, , researcher2] = await hre.viem.getWalletClients();
 
 		await market.write.createListing(
-			[recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS, title, price],
+			[
+				headerTuple(header),
+				headerCommit,
+				bodyCommit,
+				medicPkX,
+				medicPkY,
+				sigR8x,
+				sigR8y,
+				sigS,
+				price,
+			],
 			{ account: patient.account },
 		);
 
@@ -404,7 +587,17 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		const [, , researcher2] = await hre.viem.getWalletClients();
 
 		await market.write.createListing(
-			[recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS, title, price],
+			[
+				headerTuple(header),
+				headerCommit,
+				bodyCommit,
+				medicPkX,
+				medicPkY,
+				sigR8x,
+				sigR8y,
+				sigS,
+				price,
+			],
 			{ account: patient.account },
 		);
 		await market.write.placeBuyOrder([0n, pkBuyerX, pkBuyerY], {
@@ -441,7 +634,17 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 	it("cancelListing succeeds before any order, blocked after", async function () {
 		const { market, patient, researcher } = await deployFixture();
 		await market.write.createListing(
-			[recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS, title, price],
+			[
+				headerTuple(header),
+				headerCommit,
+				bodyCommit,
+				medicPkX,
+				medicPkY,
+				sigR8x,
+				sigR8y,
+				sigS,
+				price,
+			],
 			{ account: patient.account },
 		);
 		await market.write.cancelListing([0n], { account: patient.account });
@@ -450,7 +653,17 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 
 		// New listing, then place order, then cancel must fail.
 		await market.write.createListing(
-			[recordCommit, medicPkX, medicPkY, sigR8x, sigR8y, sigS, title, price],
+			[
+				headerTuple(header),
+				headerCommit,
+				bodyCommit,
+				medicPkX,
+				medicPkY,
+				sigR8x,
+				sigR8y,
+				sigS,
+				price,
+			],
 			{ account: patient.account },
 		);
 		await market.write.placeBuyOrder([1n, pkBuyerX, pkBuyerY], {

@@ -15,34 +15,38 @@ import { useChainStore } from "../store/chainStore";
 import { formatDispatchError } from "../utils/format";
 import {
 	getOrCreateBuyerKey,
+	computeBodyCommit,
+	computeHeaderCommit,
 	computeRecordCommit,
 	decryptRecord,
 	encodeRecordToFieldElements,
+	type MedicalHeader,
 } from "../utils/zk";
 import { verifySignature } from "@zk-kit/eddsa-poseidon";
 import { blake2b } from "blakejs";
 
-// Maximum native balance we're willing to spend on storage deposits (100 tokens in planck).
 const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
-// Phase 5.2 fulfill() is just a storage write + transfers; placeBuyOrder also
-// modest. The previous 30 Bgas budget for the on-chain Groth16 verify is gone.
 const CALL_WEIGHT = { ref_time: 5_000_000_000n, proof_size: 524_288n };
-// pallet-revive: 1 planck = 10^6 EVM wei (for 12-decimal chains).
 const WEI_TO_PLANCK = 1_000_000n;
 
 interface Listing {
 	id: bigint;
-	recordCommit: bigint;
+	header: MedicalHeader;
+	headerCommit: bigint;
+	bodyCommit: bigint;
 	medicPkX: bigint;
 	medicPkY: bigint;
 	sigR8x: bigint;
 	sigR8y: bigint;
 	sigS: bigint;
-	title: string;
 	price: bigint;
 	patient: Address;
 	active: boolean;
 	pendingOrderId: bigint;
+	// Off-chain pre-purchase verification: recompute headerCommit from on-chain
+	// header fields and verify medic sig over Poseidon2(headerCommit, bodyCommit).
+	headerMatch: boolean;
+	sigValid: boolean;
 }
 
 interface Order {
@@ -65,7 +69,7 @@ interface PendingOffer {
 interface DecryptedRecord {
 	orderId: bigint;
 	fields: Record<string, string>;
-	commitMatch: boolean;
+	bodyMatch: boolean;
 	sigValid: boolean;
 }
 
@@ -78,9 +82,42 @@ function hexToBytes(hex: string): Uint8Array {
 	return out;
 }
 
-/** Convert a uint256 bigint to a 0x-prefixed 32-byte big-endian hex string (64 hex chars). */
 function uint256ToHashHex(n: bigint): string {
 	return "0x" + n.toString(16).padStart(64, "0");
+}
+
+function formatRecordedAt(unixSeconds: number): string {
+	return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+	});
+}
+
+function verifyListingOffChain(
+	header: MedicalHeader,
+	headerCommit: bigint,
+	bodyCommit: bigint,
+	medicPk: { x: bigint; y: bigint },
+	sig: { R8x: bigint; R8y: bigint; S: bigint },
+): { headerMatch: boolean; sigValid: boolean } {
+	let headerMatch = false;
+	try {
+		headerMatch = computeHeaderCommit(header) === headerCommit;
+	} catch {
+		headerMatch = false;
+	}
+	let sigValid = false;
+	try {
+		const combined = computeRecordCommit(headerCommit, bodyCommit);
+		sigValid = verifySignature(combined, { R8: [sig.R8x, sig.R8y], S: sig.S }, [
+			medicPk.x,
+			medicPk.y,
+		]);
+	} catch {
+		sigValid = false;
+	}
+	return { headerMatch, sigValid };
 }
 
 export default function ResearcherBuy() {
@@ -102,13 +139,11 @@ export default function ResearcherBuy() {
 	const [pendingOffers, setPendingOffers] = useState<Record<string, PendingOffer>>({});
 	const [bidAmounts, setBidAmounts] = useState<Record<string, string>>({});
 
-	// Subscribe to statement store (live in Host, one-shot dump in local dev)
 	useEffect(() => {
 		const { unsubscribe } = subscribeStatements(wsUrl, setStmtCache);
 		return unsubscribe;
 	}, [wsUrl]);
 
-	// Load accounts: Nova Wallet → browser extension → dev fallback
 	useEffect(() => {
 		getAccountsWithFallback()
 			.then(setAccounts)
@@ -131,7 +166,6 @@ export default function ResearcherBuy() {
 
 	const currentAccount = accounts[selectedAccountIndex] ?? accounts[0];
 
-	/** Submit a write call to MedicalMarket via pallet-revive extrinsic (sr25519 signing). */
 	async function reviveCall(
 		functionName: string,
 		args: readonly unknown[],
@@ -147,8 +181,6 @@ export default function ResearcherBuy() {
 		const descriptor = await getStackTemplateDescriptor();
 		const api = client.getTypedApi(descriptor);
 
-		// pallet-revive requires an AccountId32 ↔ H160 mapping before a contract call.
-		// Dev accounts are pre-mapped via deployment; Nova Wallet accounts are not.
 		const h160 = new FixedSizeBinary(
 			hexToBytes(currentAccount.evmAddress),
 		) as FixedSizeBinary<20>;
@@ -169,7 +201,7 @@ export default function ResearcherBuy() {
 
 		const result = await api.tx.Revive.call({
 			dest: new FixedSizeBinary(hexToBytes(contractAddress)) as FixedSizeBinary<20>,
-			value: valueWei / WEI_TO_PLANCK, // EVM wei → chain planck
+			value: valueWei / WEI_TO_PLANCK,
 			weight_limit: CALL_WEIGHT,
 			storage_deposit_limit: MAX_STORAGE_DEPOSIT,
 			data: Binary.fromHex(calldata),
@@ -222,27 +254,46 @@ export default function ResearcherBuy() {
 					bigint,
 					bigint,
 					bigint,
-					string,
+					bigint,
 					bigint,
 					string,
 					boolean,
 				];
 				const [
-					recordCommit,
+					headerCommit,
+					bodyCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
 					sigR8y,
 					sigS,
-					title,
 					price,
 					patient,
 					active,
 				] = result;
-				// Keep inactive listings in state too — decryptAndView() needs the
-				// listing metadata (recordCommit, medicPk, …) for any fulfilled order
-				// in My Orders, and fulfilled listings have `active=false`. The
-				// Active Listings render loop filters on `listing.active` below.
+
+				const headerTuple = (await client.readContract({
+					address: addr,
+					abi: medicalMarketAbi,
+					functionName: "getListingHeader",
+					args: [i],
+				})) as readonly [string, string, bigint, string];
+
+				const header: MedicalHeader = {
+					title: headerTuple[0],
+					recordType: headerTuple[1],
+					recordedAt: Number(headerTuple[2]),
+					facility: headerTuple[3],
+				};
+
+				const { headerMatch, sigValid } = verifyListingOffChain(
+					header,
+					headerCommit,
+					bodyCommit,
+					{ x: medicPkX, y: medicPkY },
+					{ R8x: sigR8x, R8y: sigR8y, S: sigS },
+				);
+
 				const pendingOrderId = (await client.readContract({
 					address: addr,
 					abi: medicalMarketAbi,
@@ -251,22 +302,24 @@ export default function ResearcherBuy() {
 				})) as bigint;
 				fetchedListings.push({
 					id: i,
-					recordCommit,
+					header,
+					headerCommit,
+					bodyCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
 					sigR8y,
 					sigS,
-					title,
 					price,
 					patient: patient as Address,
 					active,
 					pendingOrderId,
+					headerMatch,
+					sigValid,
 				});
 			}
 			setListings(fetchedListings);
 
-			// Fetch the pending offer details for each active listing that has one
 			const offersMap: Record<string, PendingOffer> = {};
 			for (const listing of fetchedListings) {
 				if (listing.pendingOrderId > 0n) {
@@ -321,13 +374,6 @@ export default function ResearcherBuy() {
 		}
 	}, [contractAddress, ethRpcUrl, currentAccount.evmAddress]);
 
-	// Fetch listings + orders when contract address, RPC, or the connected
-	// account changes. Previously this effect only depended on [contractAddress,
-	// ethRpcUrl] and suppressed the ESLint warning — which meant the initial
-	// fetch used the `devAccounts` fallback's evmAddress (Alice). After async
-	// getAccountsWithFallback() resolved to the real wallet account, `orders`
-	// state was never refreshed because those two deps hadn't changed, so users
-	// saw Alice's leftover orders instead of their own.
 	useEffect(() => {
 		if (contractAddress) {
 			loadAll();
@@ -430,47 +476,32 @@ export default function ResearcherBuy() {
 				nonce: order.id,
 			});
 
-			// Phase 5.2 off-chain verification — these checks replace the
-			// dropped in-circuit binding. If either fails the patient has griefed:
-			// (1) recordCommit recomputed from the decrypted plaintext must equal
-			//     the recordCommit the medic signed (locked at listing time);
-			// (2) medic's EdDSA-Poseidon signature must be valid over recordCommit
-			//     under the published medic pubkey.
-			setTxStatus("Verifying recordCommit...");
+			// Phase 5.2 off-chain verification after decrypt:
+			// (1) bodyCommit recomputed from the decrypted body must match
+			//     listing.bodyCommit (locked at listing time);
+			// (2) medic's EdDSA-Poseidon signature validity over the combined
+			//     recordCommit was already verified pre-purchase and stored on
+			//     listing.sigValid — re-reading it here is free.
+			setTxStatus("Verifying bodyCommit...");
 			const recoveredPlaintext = encodeRecordToFieldElements(fields);
-			const recomputedCommit = computeRecordCommit(recoveredPlaintext);
-			const commitMatch = recomputedCommit === listing.recordCommit;
-
-			setTxStatus("Verifying medic signature...");
-			let sigValid = false;
-			try {
-				sigValid = verifySignature(
-					listing.recordCommit,
-					{
-						R8: [listing.sigR8x, listing.sigR8y],
-						S: listing.sigS,
-					},
-					[listing.medicPkX, listing.medicPkY],
-				);
-			} catch {
-				sigValid = false;
-			}
+			const recomputedBody = computeBodyCommit(recoveredPlaintext);
+			const bodyMatch = recomputedBody === listing.bodyCommit;
 
 			setDecryptedRecords((prev) => ({
 				...prev,
 				[order.id.toString()]: {
 					orderId: order.id,
 					fields,
-					commitMatch,
-					sigValid,
+					bodyMatch,
+					sigValid: listing.sigValid,
 				},
 			}));
 
-			if (!commitMatch) {
+			if (!bodyMatch) {
 				setTxStatus(
-					"WARNING: recordCommit mismatch — patient delivered different data than what was committed at listing time.",
+					"WARNING: bodyCommit mismatch — patient delivered different data than what was committed at listing time.",
 				);
-			} else if (!sigValid) {
+			} else if (!listing.sigValid) {
 				setTxStatus(
 					"WARNING: medic signature invalid — published listing is not signed by the claimed medic pubkey.",
 				);
@@ -503,12 +534,12 @@ export default function ResearcherBuy() {
 			<div className="space-y-2">
 				<h1 className="page-title text-accent-blue">Researcher Dashboard</h1>
 				<p className="text-text-secondary">
-					Browse active medical data listings, place buy orders, and decrypt confirmed
-					data via ECDH after the patient fulfills your order.
+					Browse active medical data listings — each carries a medic-signed header (title,
+					type, date, facility) you can verify before paying. Confirmed orders can be
+					decrypted via ECDH once the patient fulfills.
 				</p>
 			</div>
 
-			{/* Configuration */}
 			<div className="card space-y-4">
 				<div>
 					<label className="label">MedicalMarket Contract Address</label>
@@ -549,7 +580,6 @@ export default function ResearcherBuy() {
 				<Toast message={txStatus} onClose={() => setTxStatus(null)} />
 			</div>
 
-			{/* Marketplace */}
 			<div className="card space-y-4">
 				<div className="flex items-center justify-between">
 					<h2 className="section-title">Active Listings</h2>
@@ -566,113 +596,75 @@ export default function ResearcherBuy() {
 					<div className="space-y-2">
 						{listings
 							.filter((l) => l.active)
-							.map((listing) => (
-								<div
-									key={listing.id.toString()}
-									className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm space-y-1.5"
-								>
-									<div className="flex items-start justify-between gap-2">
-										<div>
-											<p className="text-text-primary font-medium">
-												{listing.title}
-											</p>
-											<p className="text-text-tertiary text-xs mt-0.5">
-												Listing #{listing.id.toString()}
-											</p>
-										</div>
-										{listing.pendingOrderId > 0n ? (
-											<span className="px-2 py-0.5 rounded-full bg-accent-yellow/10 text-accent-yellow text-xs font-medium whitespace-nowrap">
-												Best:{" "}
-												{pendingOffers[listing.id.toString()]?.amount !==
-												undefined
-													? formatEther(
-															pendingOffers[listing.id.toString()]
-																.amount,
-														) + " PAS"
-													: "?"}
-											</span>
-										) : (
-											<button
-												onClick={() => placeBuyOrder(listing)}
-												disabled={loading}
-												className="btn-accent text-xs px-3 py-1 whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
-												style={{
-													background:
-														"linear-gradient(135deg, #4cc2ff 0%, #0090d4 100%)",
-													boxShadow:
-														"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
-												}}
-											>
-												{loading ? (
-													<>
-														<Spinner />
-														Placing order…
-													</>
-												) : (
-													<>Buy for {formatEther(listing.price)} PAS</>
-												)}
-											</button>
-										)}
-									</div>
-									<p className="font-mono text-xs text-text-muted break-all">
-										Commit:{" "}
-										{listing.recordCommit
-											.toString(16)
-											.slice(0, 12)
-											.padStart(12, "0")}
-										…
-									</p>
-									<p className="text-text-tertiary">
-										Patient:{" "}
-										<span className="text-text-secondary font-mono">
-											{truncate(listing.patient)}
-										</span>{" "}
-										| Price:{" "}
-										<span className="text-text-secondary">
-											{formatEther(listing.price)} PAS
-										</span>
-									</p>
-									{(() => {
-										const offer = pendingOffers[listing.id.toString()];
-										const isMyOffer =
-											offer &&
-											offer.researcher.toLowerCase() ===
-												currentAccount.evmAddress.toLowerCase();
-										if (listing.pendingOrderId === 0n) return null;
-										if (isMyOffer)
-											return (
-												<p className="text-xs text-accent-yellow">
-													You hold the best offer — cancel it from My
-													Orders below.
+							.map((listing) => {
+								const medicVerified = listing.headerMatch && listing.sigValid;
+								return (
+									<div
+										key={listing.id.toString()}
+										className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm space-y-1.5"
+									>
+										<div className="flex items-start justify-between gap-2">
+											<div className="min-w-0">
+												<div className="flex items-center gap-2 flex-wrap">
+													<p className="text-text-primary font-medium">
+														{listing.header.title}
+													</p>
+													<span
+														className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${
+															medicVerified
+																? "bg-accent-green/10 text-accent-green"
+																: "bg-accent-red/10 text-accent-red"
+														}`}
+														title={
+															medicVerified
+																? "headerCommit matches and medic sig valid"
+																: !listing.headerMatch
+																	? "headerCommit mismatch — header does not hash to what the medic signed"
+																	: "medic signature invalid"
+														}
+													>
+														{medicVerified
+															? "✓ medic-verified"
+															: "✗ unverified"}
+													</span>
+												</div>
+												<div className="flex flex-wrap gap-1.5 mt-1 text-[10px]">
+													<span className="px-1.5 py-0.5 rounded bg-polka-500/10 text-polka-400 font-medium">
+														{listing.header.recordType}
+													</span>
+													<span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-text-tertiary">
+														{formatRecordedAt(
+															listing.header.recordedAt,
+														)}
+													</span>
+													<span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-text-tertiary">
+														{listing.header.facility}
+													</span>
+												</div>
+												<p className="text-text-tertiary text-xs mt-1">
+													Listing #{listing.id.toString()}
 												</p>
-											);
-										return (
-											<div className="flex gap-2 items-center flex-wrap">
-												<input
-													type="text"
-													value={bidAmounts[listing.id.toString()] ?? ""}
-													onChange={(e) =>
-														setBidAmounts((prev) => ({
-															...prev,
-															[listing.id.toString()]: e.target.value,
-														}))
-													}
-													placeholder={`> ${offer ? formatEther(offer.amount) : "?"} PAS`}
-													className="input-field w-28 text-xs py-1"
-												/>
+											</div>
+											{listing.pendingOrderId > 0n ? (
+												<span className="px-2 py-0.5 rounded-full bg-accent-yellow/10 text-accent-yellow text-xs font-medium whitespace-nowrap">
+													Best:{" "}
+													{pendingOffers[listing.id.toString()]
+														?.amount !== undefined
+														? formatEther(
+																pendingOffers[listing.id.toString()]
+																	.amount,
+															) + " PAS"
+														: "?"}
+												</span>
+											) : (
 												<button
-													onClick={() => {
-														const raw =
-															bidAmounts[listing.id.toString()];
-														if (
-															!raw ||
-															isNaN(Number(raw)) ||
-															Number(raw) <= 0
-														)
-															return;
-														placeBuyOrder(listing, parseEther(raw));
-													}}
-													disabled={loading}
+													onClick={() => placeBuyOrder(listing)}
+													disabled={loading || !medicVerified}
+													title={
+														!medicVerified
+															? "Listing failed off-chain verification"
+															: undefined
+													}
 													className="btn-accent text-xs px-3 py-1 whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
 													style={{
 														background:
@@ -681,21 +673,104 @@ export default function ResearcherBuy() {
 															"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
 													}}
 												>
-													{loading ? <Spinner /> : "Outbid"}
+													{loading ? (
+														<>
+															<Spinner />
+															Placing order…
+														</>
+													) : (
+														<>
+															Buy for {formatEther(listing.price)} PAS
+														</>
+													)}
 												</button>
-											</div>
-										);
-									})()}
-									<div>
-										<VerifiedBadge address={listing.patient} />
+											)}
+										</div>
+										<p className="font-mono text-xs text-text-muted break-all">
+											body{" "}
+											{listing.bodyCommit
+												.toString(16)
+												.slice(0, 12)
+												.padStart(12, "0")}
+											…
+										</p>
+										<p className="text-text-tertiary">
+											Patient:{" "}
+											<span className="text-text-secondary font-mono">
+												{truncate(listing.patient)}
+											</span>{" "}
+											| Price:{" "}
+											<span className="text-text-secondary">
+												{formatEther(listing.price)} PAS
+											</span>
+										</p>
+										{(() => {
+											const offer = pendingOffers[listing.id.toString()];
+											const isMyOffer =
+												offer &&
+												offer.researcher.toLowerCase() ===
+													currentAccount.evmAddress.toLowerCase();
+											if (listing.pendingOrderId === 0n) return null;
+											if (isMyOffer)
+												return (
+													<p className="text-xs text-accent-yellow">
+														You hold the best offer — cancel it from My
+														Orders below.
+													</p>
+												);
+											return (
+												<div className="flex gap-2 items-center flex-wrap">
+													<input
+														type="text"
+														value={
+															bidAmounts[listing.id.toString()] ?? ""
+														}
+														onChange={(e) =>
+															setBidAmounts((prev) => ({
+																...prev,
+																[listing.id.toString()]:
+																	e.target.value,
+															}))
+														}
+														placeholder={`> ${offer ? formatEther(offer.amount) : "?"} PAS`}
+														className="input-field w-28 text-xs py-1"
+													/>
+													<button
+														onClick={() => {
+															const raw =
+																bidAmounts[listing.id.toString()];
+															if (
+																!raw ||
+																isNaN(Number(raw)) ||
+																Number(raw) <= 0
+															)
+																return;
+															placeBuyOrder(listing, parseEther(raw));
+														}}
+														disabled={loading || !medicVerified}
+														className="btn-accent text-xs px-3 py-1 whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
+														style={{
+															background:
+																"linear-gradient(135deg, #4cc2ff 0%, #0090d4 100%)",
+															boxShadow:
+																"0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)",
+														}}
+													>
+														{loading ? <Spinner /> : "Outbid"}
+													</button>
+												</div>
+											);
+										})()}
+										<div>
+											<VerifiedBadge address={listing.patient} />
+										</div>
 									</div>
-								</div>
-							))}
+								);
+							})}
 					</div>
 				)}
 			</div>
 
-			{/* My Orders */}
 			<div className="card space-y-4">
 				<h2 className="section-title">My Orders</h2>
 
@@ -775,9 +850,9 @@ export default function ResearcherBuy() {
 										<div className="mt-2 space-y-1">
 											<div className="flex flex-wrap gap-2 text-xs">
 												<span
-													className={`px-1.5 py-0.5 rounded ${decrypted.commitMatch ? "bg-accent-green/10 text-accent-green" : "bg-accent-red/10 text-accent-red"}`}
+													className={`px-1.5 py-0.5 rounded ${decrypted.bodyMatch ? "bg-accent-green/10 text-accent-green" : "bg-accent-red/10 text-accent-red"}`}
 												>
-													{decrypted.commitMatch ? "✓" : "✗"} recordCommit
+													{decrypted.bodyMatch ? "✓" : "✗"} bodyCommit
 												</span>
 												<span
 													className={`px-1.5 py-0.5 rounded ${decrypted.sigValid ? "bg-accent-green/10 text-accent-green" : "bg-accent-red/10 text-accent-red"}`}

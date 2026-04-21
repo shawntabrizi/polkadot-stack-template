@@ -1,4 +1,4 @@
-import { poseidon2, poseidon4, poseidon16 } from "poseidon-lite";
+import { poseidon2, poseidon4, poseidon8, poseidon16 } from "poseidon-lite";
 import { mulPointEscalar, Base8, order as jubOrder } from "@zk-kit/baby-jubjub";
 
 const BN254_R = BigInt(
@@ -10,17 +10,30 @@ const BYTES_PER_SLOT = 31;
 export const MAX_FIELDS = 32;
 export const MAX_PAYLOAD_BYTES = (MAX_FIELDS - 1) * BYTES_PER_SLOT; // 961
 
+export const HEADER_FIELDS = 8;
+export const HEADER_MAX_PAYLOAD_BYTES = (HEADER_FIELDS - 1) * BYTES_PER_SLOT; // 217
+
 const RS = 0x1e;
 const US = 0x1f;
 
+export interface MedicalHeader {
+	title: string;
+	recordType: string;
+	recordedAt: number;
+	facility: string;
+}
+
 export interface SignedRecord {
-	version: "v2-record";
-	plaintext: string[];
-	recordCommit: string;
+	version: "v3-record";
+	header: MedicalHeader;
+	body: string[]; // plaintext body as stringified bigints (length MAX_FIELDS)
+	headerCommit: string;
+	bodyCommit: string;
+	recordCommit: string; // Poseidon2(headerCommit, bodyCommit) — what the medic signs
 	signature: { R8x: string; R8y: string; S: string };
 	medicPublicKey: { x: string; y: string };
 	signedAt: string;
-	fieldsPreview: Record<string, string>;
+	bodyFieldsPreview: Record<string, string>;
 }
 
 function bytesToBigint(bytes: Uint8Array): bigint {
@@ -38,7 +51,11 @@ function bigintToBytes(n: bigint, len: number): Uint8Array {
 	return out;
 }
 
-export function encodeRecordToFieldElements(fields: Record<string, string>): bigint[] {
+function encodeFieldsFixed(
+	fields: Record<string, string>,
+	slotCount: number,
+	maxPayload: number,
+): bigint[] {
 	const keys = Object.keys(fields).sort();
 	for (const k of keys) {
 		if (k.includes("\x1f") || k.includes("\x1e"))
@@ -57,8 +74,8 @@ export function encodeRecordToFieldElements(fields: Record<string, string>): big
 		parts.push(new Uint8Array([RS]));
 	}
 	const totalLen = parts.reduce((s, p) => s + p.length, 0);
-	if (totalLen > MAX_PAYLOAD_BYTES) {
-		throw new Error(`record too large: ${totalLen} bytes (max ${MAX_PAYLOAD_BYTES})`);
+	if (totalLen > maxPayload) {
+		throw new Error(`record too large: ${totalLen} bytes (max ${maxPayload})`);
 	}
 	const bytes = new Uint8Array(totalLen);
 	let o = 0;
@@ -67,15 +84,32 @@ export function encodeRecordToFieldElements(fields: Record<string, string>): big
 		o += p.length;
 	}
 
-	const plaintext: bigint[] = new Array(MAX_FIELDS).fill(0n);
+	const plaintext: bigint[] = new Array(slotCount).fill(0n);
 	plaintext[0] = BigInt(totalLen);
-	for (let i = 0; i < MAX_FIELDS - 1; i++) {
+	for (let i = 0; i < slotCount - 1; i++) {
 		const start = i * BYTES_PER_SLOT;
 		if (start >= totalLen) break;
 		const end = Math.min(start + BYTES_PER_SLOT, totalLen);
 		plaintext[i + 1] = bytesToBigint(bytes.subarray(start, end));
 	}
 	return plaintext;
+}
+
+export function encodeRecordToFieldElements(fields: Record<string, string>): bigint[] {
+	return encodeFieldsFixed(fields, MAX_FIELDS, MAX_PAYLOAD_BYTES);
+}
+
+function headerToFields(header: MedicalHeader): Record<string, string> {
+	return {
+		title: header.title,
+		recordType: header.recordType,
+		recordedAt: String(header.recordedAt),
+		facility: header.facility,
+	};
+}
+
+export function encodeHeaderToFieldElements(header: MedicalHeader): bigint[] {
+	return encodeFieldsFixed(headerToFields(header), HEADER_FIELDS, HEADER_MAX_PAYLOAD_BYTES);
 }
 
 export function decodeRecordFromFieldElements(plaintext: bigint[]): Record<string, string> {
@@ -117,8 +151,21 @@ export function hashChain32(inputs: bigint[]): bigint {
 	return poseidon2([h1, h2]);
 }
 
-export const computeRecordCommit = hashChain32;
+export function hashChain8(inputs: bigint[]): bigint {
+	if (inputs.length !== HEADER_FIELDS) throw new Error(`expected ${HEADER_FIELDS} inputs`);
+	return poseidon8(inputs);
+}
+
+export const computeBodyCommit = hashChain32;
 export const computeCiphertextHash = hashChain32;
+
+export function computeHeaderCommit(header: MedicalHeader): bigint {
+	return hashChain8(encodeHeaderToFieldElements(header));
+}
+
+export function computeRecordCommit(headerCommit: bigint, bodyCommit: bigint): bigint {
+	return poseidon2([headerCommit, bodyCommit]);
+}
 
 export function randomScalar(): bigint {
 	const buf = new Uint8Array(32);

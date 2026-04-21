@@ -6,8 +6,11 @@ import FileDropZone from "../components/FileDropZone";
 import VerifiedBadge from "../components/VerifiedBadge";
 import {
 	encodeRecordToFieldElements,
+	computeBodyCommit,
+	computeHeaderCommit,
 	computeRecordCommit,
 	MAX_PAYLOAD_BYTES,
+	type MedicalHeader,
 	type SignedRecord,
 } from "../utils/zk";
 
@@ -21,20 +24,50 @@ function truncate(s: string): string {
 
 type Step = 1 | 2 | 3;
 
+const RECORD_TYPES = [
+	"CBC",
+	"Metabolic Panel",
+	"MRI",
+	"CT Scan",
+	"X-Ray",
+	"Genome/SNP Array",
+	"Pathology",
+	"ECG",
+	"Other",
+];
+
+function todayISO(): string {
+	const d = new Date();
+	return d.toISOString().slice(0, 10);
+}
+
+function isoToUnixSeconds(iso: string): number {
+	const t = Date.parse(iso);
+	if (Number.isNaN(t)) throw new Error(`invalid date: ${iso}`);
+	return Math.floor(t / 1000);
+}
+
 export default function MedicSign() {
 	const [step, setStep] = useState<Step>(1);
 	const [selectedAccount, setSelectedAccount] = useState(0);
 
-	// Step 1
+	// Step 1 — body JSON + header fields
 	const [fields, setFields] = useState<[string, string][] | null>(null);
 	const [parseError, setParseError] = useState<string | null>(null);
+	const [title, setTitle] = useState("");
+	const [recordType, setRecordType] = useState(RECORD_TYPES[0]);
+	const [recordedAtISO, setRecordedAtISO] = useState(todayISO());
+	const [facility, setFacility] = useState("");
 
 	// Step 2
 	const [encoding, setEncoding] = useState(false);
 	const [encodeError, setEncodeError] = useState<string | null>(null);
-	const [plaintext, setPlaintext] = useState<bigint[] | null>(null);
+	const [bodyPlaintext, setBodyPlaintext] = useState<bigint[] | null>(null);
+	const [headerCommit, setHeaderCommit] = useState<bigint | null>(null);
+	const [bodyCommit, setBodyCommit] = useState<bigint | null>(null);
 	const [recordCommit, setRecordCommit] = useState<bigint | null>(null);
 	const [byteCount, setByteCount] = useState<number | null>(null);
+	const [header, setHeader] = useState<MedicalHeader | null>(null);
 
 	// Step 3
 	const [sig, setSig] = useState<{ R8x: string; R8y: string; S: string } | null>(null);
@@ -43,9 +76,12 @@ export default function MedicSign() {
 	const onFileBytes = useCallback((bytes: Uint8Array) => {
 		setParseError(null);
 		setEncodeError(null);
-		setPlaintext(null);
+		setBodyPlaintext(null);
+		setHeaderCommit(null);
+		setBodyCommit(null);
 		setRecordCommit(null);
 		setByteCount(null);
+		setHeader(null);
 		setSig(null);
 		setPubKey(null);
 		setStep(1);
@@ -71,25 +107,39 @@ export default function MedicSign() {
 		}
 	}, []);
 
+	const headerReady = title.trim().length > 0 && facility.trim().length > 0;
+	const canContinueStep1 = fields !== null && headerReady;
+
 	async function encodeAndCommit() {
 		if (!fields) return;
 		setEncoding(true);
 		setEncodeError(null);
 		try {
-			const record = Object.fromEntries(fields);
-			const pt = encodeRecordToFieldElements(record);
-			const commit = computeRecordCommit(pt);
+			const body = Object.fromEntries(fields);
+			const pt = encodeRecordToFieldElements(body);
+			const bCommit = computeBodyCommit(pt);
 
-			// Compute byte count by re-encoding (same logic as encodeRecordToFieldElements)
+			const hdr: MedicalHeader = {
+				title: title.trim(),
+				recordType,
+				recordedAt: isoToUnixSeconds(recordedAtISO),
+				facility: facility.trim(),
+			};
+			const hCommit = computeHeaderCommit(hdr);
+			const combined = computeRecordCommit(hCommit, bCommit);
+
 			const enc = new TextEncoder();
-			const keys = Object.keys(record).sort();
+			const keys = Object.keys(body).sort();
 			let total = 0;
 			for (const k of keys) {
-				total += enc.encode(k).length + 1 + enc.encode(String(record[k])).length + 1;
+				total += enc.encode(k).length + 1 + enc.encode(String(body[k])).length + 1;
 			}
 
-			setPlaintext(pt);
-			setRecordCommit(commit);
+			setBodyPlaintext(pt);
+			setBodyCommit(bCommit);
+			setHeaderCommit(hCommit);
+			setRecordCommit(combined);
+			setHeader(hdr);
 			setByteCount(total);
 		} catch (err) {
 			setEncodeError(err instanceof Error ? err.message : String(err));
@@ -112,16 +162,26 @@ export default function MedicSign() {
 	}
 
 	const packageJson =
-		fields && recordCommit && plaintext && sig && pubKey
+		fields &&
+		header &&
+		headerCommit &&
+		bodyCommit &&
+		recordCommit &&
+		bodyPlaintext &&
+		sig &&
+		pubKey
 			? JSON.stringify(
 					{
-						version: "v2-record",
-						plaintext: plaintext.map((n) => n.toString()),
+						version: "v3-record",
+						header,
+						body: bodyPlaintext.map((n) => n.toString()),
+						headerCommit: headerCommit.toString(),
+						bodyCommit: bodyCommit.toString(),
 						recordCommit: recordCommit.toString(),
 						signature: sig,
 						medicPublicKey: pubKey,
 						signedAt: new Date().toISOString(),
-						fieldsPreview: Object.fromEntries(fields),
+						bodyFieldsPreview: Object.fromEntries(fields),
 					} satisfies SignedRecord,
 					null,
 					2,
@@ -162,9 +222,9 @@ export default function MedicSign() {
 				<h1 className="page-title text-polka-500">Medic Signing Tool</h1>
 				<p className="text-text-secondary">
 					Sign patient records with your professional key. The patient imports this signed
-					package and lists it on the marketplace. Your public key and the signature are
-					published with the listing so any researcher can verify the signing medic before
-					paying.
+					package and lists it on the marketplace. You sign both the record body (the
+					clinical payload) and a structured header (title, type, date, facility) so
+					researchers can filter listings by medic-attested metadata before paying.
 				</p>
 			</div>
 
@@ -190,22 +250,15 @@ export default function MedicSign() {
 					<span className="text-text-muted text-xs font-mono">
 						{evmDevAccounts[selectedAccount].account.address}
 					</span>
-					{/*
-					 * Badge uses devAccounts[i].evmAddress (keccak256(sr25519_publicKey)[-20:])
-					 * because that is the H160 pallet-revive sees as msg.sender when this
-					 * dev account signs a contract call via PAPI. The viem-derived address
-					 * in evmDevAccounts above is the EVM secp256k1 address and will never
-					 * match listing.patient or the MedicAuthority registry.
-					 */}
 					<VerifiedBadge address={devAccounts[selectedAccount].evmAddress} />
 				</div>
 			</div>
 
-			{/* Step 1 — Upload Record */}
+			{/* Step 1 — Upload Record + Header */}
 			<div className="card space-y-4">
 				<StepHeader
 					number={1}
-					title="Upload Record"
+					title="Upload Record & Header"
 					active={stepActive(1)}
 					done={stepDone(1)}
 				/>
@@ -228,7 +281,7 @@ export default function MedicSign() {
 						<table className="w-full text-sm">
 							<thead>
 								<tr className="text-text-tertiary text-xs uppercase tracking-wider">
-									<th className="text-left pb-2">Field</th>
+									<th className="text-left pb-2">Body field</th>
 									<th className="text-left pb-2">Value</th>
 								</tr>
 							</thead>
@@ -243,10 +296,70 @@ export default function MedicSign() {
 								))}
 							</tbody>
 						</table>
+
+						<div className="border-t border-white/[0.06] pt-4 space-y-3">
+							<p className="text-text-secondary text-sm">
+								Header — medic-signed, publicly browsable on-chain. Researchers
+								filter listings by these fields before deciding to buy.
+							</p>
+
+							<div>
+								<label className="label">Title</label>
+								<input
+									type="text"
+									value={title}
+									onChange={(e) => setTitle(e.target.value)}
+									disabled={stepDone(1)}
+									placeholder="e.g. Complete Blood Count (Apr 2026)"
+									className="input-field w-full"
+								/>
+							</div>
+
+							<div className="grid grid-cols-2 gap-3">
+								<div>
+									<label className="label">Record type</label>
+									<select
+										value={recordType}
+										onChange={(e) => setRecordType(e.target.value)}
+										disabled={stepDone(1)}
+										className="input-field w-full"
+									>
+										{RECORD_TYPES.map((t) => (
+											<option key={t} value={t}>
+												{t}
+											</option>
+										))}
+									</select>
+								</div>
+								<div>
+									<label className="label">Recorded at</label>
+									<input
+										type="date"
+										value={recordedAtISO}
+										onChange={(e) => setRecordedAtISO(e.target.value)}
+										disabled={stepDone(1)}
+										className="input-field w-full"
+									/>
+								</div>
+							</div>
+
+							<div>
+								<label className="label">Facility</label>
+								<input
+									type="text"
+									value={facility}
+									onChange={(e) => setFacility(e.target.value)}
+									disabled={stepDone(1)}
+									placeholder="e.g. Clinica Polyclinic — Buenos Aires"
+									className="input-field w-full"
+								/>
+							</div>
+						</div>
+
 						<button
 							onClick={() => setStep(2)}
 							className="btn-primary"
-							disabled={stepDone(1)}
+							disabled={stepDone(1) || !canContinueStep1}
 						>
 							Continue →
 						</button>
@@ -289,20 +402,35 @@ export default function MedicSign() {
 							disabled={encoding}
 							className="btn-secondary"
 						>
-							{encoding ? "Encoding…" : "Encode & Compute Commit"}
+							{encoding ? "Encoding…" : "Encode & Compute Commits"}
 						</button>
 					) : (
 						<div className="space-y-3">
 							<div>
-								<label className="label">Record Commit</label>
-								<div className="input-field font-mono text-xs text-text-secondary flex items-center justify-between gap-2">
-									<span className="truncate">{recordCommit.toString()}</span>
+								<label className="label">Header commit</label>
+								<div className="input-field font-mono text-xs text-text-secondary break-all">
+									{headerCommit?.toString()}
+								</div>
+							</div>
+							<div>
+								<label className="label">Body commit</label>
+								<div className="input-field font-mono text-xs text-text-secondary break-all">
+									{bodyCommit?.toString()}
 								</div>
 								{byteCount !== null && (
 									<p className="text-xs text-text-muted mt-1">
-										{byteCount} / {MAX_PAYLOAD_BYTES} bytes used
+										Body: {byteCount} / {MAX_PAYLOAD_BYTES} bytes used
 									</p>
 								)}
+							</div>
+							<div>
+								<label className="label">Record commit (signed)</label>
+								<div className="input-field font-mono text-xs text-text-secondary break-all">
+									{recordCommit.toString()}
+								</div>
+								<p className="text-xs text-text-muted mt-1">
+									Poseidon2(headerCommit, bodyCommit) — what the medic signs.
+								</p>
 							</div>
 							<button
 								onClick={() => setStep(3)}

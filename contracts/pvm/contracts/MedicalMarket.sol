@@ -3,30 +3,50 @@ pragma solidity ^0.8.28;
 
 /// @title MedicalMarket — Phase 5.2
 /// @notice Encrypted-data marketplace with off-chain cryptographic verification.
-///         Patient encrypts the medic-signed record for the buyer's BabyJubJub
-///         public key (ECDH + Poseidon stream cipher) off-chain, uploads the
-///         ciphertext bytes to the Statement Store, and calls fulfill() with the
-///         ephemeral pk + ciphertextHash. The contract is a pure escrow + signal
-///         layer: no on-chain ZK proof, no in-circuit binding. The medic's
-///         EdDSA-Poseidon signature over recordCommit is published with the
-///         listing so any researcher can verify the signing medic before paying;
-///         buyers verify (sig, recordCommit, decrypted plaintext) off-chain
-///         after fetching the ciphertext.
+///         The record is split into a public, medic-signed header (title,
+///         recordType, recordedAt, facility — browsable pre-purchase) and an
+///         encrypted body (the clinical payload). The medic signs
+///         Poseidon2(headerCommit, bodyCommit); buyers recompute the header
+///         commit from the on-chain fields and verify the combined signature
+///         off-chain before paying.
+///
+///         The contract does NOT verify Poseidon(headerFields) == headerCommit
+///         on-chain — Phase 5.2 keeps cryptography off-chain. A patient who
+///         supplies header fields that don't hash to the on-chain headerCommit
+///         will see the "medic-verified" badge fail on the listing card in
+///         ResearcherBuy, so the listing is effectively unsellable.
+///
+///         At fulfill time the patient encrypts the body for the buyer's
+///         BabyJubJub pubkey (ECDH + Poseidon stream cipher), uploads the
+///         ciphertext to the Statement Store, and calls fulfill() with
+///         ephPk + ciphertextHash. Buyers recompute bodyCommit from the
+///         decrypted plaintext and compare against listing.bodyCommit.
 ///
 ///         Atomicity is relaxed: a dishonest patient could upload garbage to the
-///         Statement Store. The buyer detects this by recomputing
-///         HashChain32(plaintext) and comparing against listing.recordCommit.
-///         Phase 5.3 (planned) adds an escrow / acknowledge / reclaim window so
-///         a buyer who can't decrypt can recover their payment.
+///         Statement Store. Phase 5.3 (planned) adds an escrow / acknowledge /
+///         reclaim window so a buyer who can't decrypt can recover their payment.
 contract MedicalMarket {
+	struct HeaderInput {
+		string title;
+		string recordType;
+		uint64 recordedAt;
+		string facility;
+	}
+
 	struct Listing {
-		uint256 recordCommit; // Poseidon(plaintext[32]) — what the medic signed
-		uint256 medicPkX; // medic's BabyJubJub pubkey (EdDSA-Poseidon)
+		// medic-signed header (public, browsable, recomputed off-chain)
+		string title;
+		string recordType;
+		uint64 recordedAt;
+		string facility;
+		uint256 headerCommit; // Poseidon8(encodeHeader(header))
+		uint256 bodyCommit; // Poseidon-chain over encrypted body plaintext[32]
+		// medic attestation (signs Poseidon2(headerCommit, bodyCommit))
+		uint256 medicPkX;
 		uint256 medicPkY;
-		uint256 sigR8x; // medic's EdDSA signature over recordCommit
+		uint256 sigR8x;
 		uint256 sigR8y;
 		uint256 sigS;
-		string title; // human-readable label shown before buying
 		uint256 price; // minimum price in wei (native PAS)
 		address patient;
 		bool active;
@@ -62,10 +82,14 @@ contract MedicalMarket {
 	event ListingCreated(
 		address indexed patient,
 		uint256 indexed listingId,
-		uint256 recordCommit,
+		uint256 headerCommit,
+		uint256 bodyCommit,
 		uint256 medicPkX,
 		uint256 medicPkY,
 		string title,
+		string recordType,
+		uint64 recordedAt,
+		string facility,
 		uint256 price
 	);
 	event OrderPlaced(
@@ -93,40 +117,63 @@ contract MedicalMarket {
 		uint256 amount
 	);
 
-	/// @notice Create a listing. recordCommit is Poseidon-chained over the
-	///         medic-signed plaintext[32]; the medic's pubkey + EdDSA signature
-	///         over recordCommit are published so any researcher can pre-verify
-	///         "a known medic signed this commit" before paying.
+	/// @notice Create a listing. The header fields are stored in the clear so
+	///         researchers can filter before paying; the medic's EdDSA-Poseidon
+	///         signature is over Poseidon2(headerCommit, bodyCommit). Buyers
+	///         recompute the header commit off-chain and verify the signature
+	///         before placing an order.
 	function createListing(
-		uint256 recordCommit,
+		HeaderInput calldata header,
+		uint256 headerCommit,
+		uint256 bodyCommit,
 		uint256 medicPkX,
 		uint256 medicPkY,
 		uint256 sigR8x,
 		uint256 sigR8y,
 		uint256 sigS,
-		string calldata title,
 		uint256 price
 	) external {
 		require(price > 0, "Price must be greater than zero");
-		require(bytes(title).length > 0, "Title cannot be empty");
-		require(recordCommit != 0, "recordCommit must be non-zero");
+		require(bytes(header.title).length > 0, "Title cannot be empty");
+		require(bytes(header.recordType).length > 0, "recordType cannot be empty");
+		require(bytes(header.facility).length > 0, "facility cannot be empty");
+		require(header.recordedAt > 0, "recordedAt must be non-zero");
+		require(headerCommit != 0, "headerCommit must be non-zero");
+		require(bodyCommit != 0, "bodyCommit must be non-zero");
 		require(medicPkX != 0 || medicPkY != 0, "medicPk must be non-zero");
 		require(sigS != 0, "signature must be non-zero");
+
 		uint256 listingId = listingCount;
 		listings[listingId] = Listing({
-			recordCommit: recordCommit,
+			title: header.title,
+			recordType: header.recordType,
+			recordedAt: header.recordedAt,
+			facility: header.facility,
+			headerCommit: headerCommit,
+			bodyCommit: bodyCommit,
 			medicPkX: medicPkX,
 			medicPkY: medicPkY,
 			sigR8x: sigR8x,
 			sigR8y: sigR8y,
 			sigS: sigS,
-			title: title,
 			price: price,
 			patient: msg.sender,
 			active: true
 		});
 		listingCount++;
-		emit ListingCreated(msg.sender, listingId, recordCommit, medicPkX, medicPkY, title, price);
+		emit ListingCreated(
+			msg.sender,
+			listingId,
+			headerCommit,
+			bodyCommit,
+			medicPkX,
+			medicPkY,
+			header.title,
+			header.recordType,
+			header.recordedAt,
+			header.facility,
+			price
+		);
 	}
 
 	/// @notice Lock native PAS and register the buyer's BabyJubJub pubkey.
@@ -179,7 +226,7 @@ contract MedicalMarket {
 
 	/// @notice Patient declares the ephemeral pk + Statement Store ciphertext
 	///         hash and releases payment. No on-chain proof: the buyer verifies
-	///         signature + recordCommit off-chain after decryption.
+	///         signature + bodyCommit off-chain after decryption.
 	function fulfill(
 		uint256 orderId,
 		uint256 ephPkX,
@@ -252,19 +299,21 @@ contract MedicalMarket {
 		emit OrderCancelled(orderId, order.listingId, order.researcher, order.amount);
 	}
 
+	/// @notice Listing metadata: commits, medic attestation, price, patient, active.
+	///         Use getListingHeader(id) for the human-readable header fields.
 	function getListing(
 		uint256 id
 	)
 		external
 		view
 		returns (
-			uint256 recordCommit,
+			uint256 headerCommit,
+			uint256 bodyCommit,
 			uint256 medicPkX,
 			uint256 medicPkY,
 			uint256 sigR8x,
 			uint256 sigR8y,
 			uint256 sigS,
-			string memory title,
 			uint256 price,
 			address patient,
 			bool active
@@ -272,17 +321,36 @@ contract MedicalMarket {
 	{
 		Listing storage l = listings[id];
 		return (
-			l.recordCommit,
+			l.headerCommit,
+			l.bodyCommit,
 			l.medicPkX,
 			l.medicPkY,
 			l.sigR8x,
 			l.sigR8y,
 			l.sigS,
-			l.title,
 			l.price,
 			l.patient,
 			l.active
 		);
+	}
+
+	/// @notice Medic-signed header fields for a listing (title, recordType,
+	///         recordedAt, facility). Researchers recompute headerCommit from
+	///         these and verify the medic sig before buying.
+	function getListingHeader(
+		uint256 id
+	)
+		external
+		view
+		returns (
+			string memory title,
+			string memory recordType,
+			uint64 recordedAt,
+			string memory facility
+		)
+	{
+		Listing storage l = listings[id];
+		return (l.title, l.recordType, l.recordedAt, l.facility);
 	}
 
 	function getListingCount() external view returns (uint256) {
