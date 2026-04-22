@@ -200,22 +200,27 @@ export default function AccountsPage() {
 		};
 	}, []);
 
-	// Detect available browser extension wallets on mount.
-	// Delay so extensions have time to inject into window.injectedWeb3 before we read it —
-	// production builds mount faster than dev and hit a race condition without this.
+	// Poll for browser extension wallets. Production builds parse JS faster than dev,
+	// so a one-shot 200ms delay misses the extension injection window. Poll every 250ms
+	// for up to 3s; stop as soon as something is found.
 	useEffect(() => {
-		const detect = () => {
+		let attempts = 0;
+		const MAX = 12; // 12 × 250ms = 3s
+		const timer = setInterval(() => {
+			attempts++;
 			try {
 				const wallets = getInjectedExtensions().filter(
 					(name) => name !== SpektrExtensionName,
 				);
-				setAvailableWallets(wallets);
+				if (wallets.length > 0 || attempts >= MAX) {
+					setAvailableWallets(wallets);
+					clearInterval(timer);
+				}
 			} catch {
-				// No injected extensions available
+				if (attempts >= MAX) clearInterval(timer);
 			}
-		};
-		const timer = setTimeout(detect, 200);
-		return () => clearTimeout(timer);
+		}, 250);
+		return () => clearInterval(timer);
 	}, []);
 
 	async function connectWallet(name: string) {
