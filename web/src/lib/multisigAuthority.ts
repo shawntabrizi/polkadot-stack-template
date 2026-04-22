@@ -146,8 +146,11 @@ export function otherSignatoriesFor(allSs58: string[], signerSs58: string): stri
 
 export async function computeCallHash(innerCall: AnyApi): Promise<`0x${string}`> {
 	const encoded = await innerCall.getEncodedData();
-	const { blake2AsHex } = await import("@polkadot/util-crypto");
-	return blake2AsHex(encoded.asBytes(), 256) as `0x${string}`;
+	const { blake2b } = await import("blakejs");
+	const hash = blake2b(encoded.asBytes(), undefined, 32);
+	return `0x${Array.from(hash)
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("")}` as `0x${string}`;
 }
 
 // ---------------------------------------------------------------------------
