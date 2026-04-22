@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Domain to deploy to — flag > env var > default
-DOMAIN="${DOMAIN:-polkadot-stack-template00.dot}"
+DOMAIN="${DOMAIN:-own-your-medical-records42}"
 
 echo "=== Deploy Frontend to Bulletin Chain ==="
 echo "  Domain: $DOMAIN"

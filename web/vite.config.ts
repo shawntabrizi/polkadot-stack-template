@@ -16,6 +16,7 @@ export default defineConfig({
 	},
 	build: {
 		target: "esnext",
+		chunkSizeWarningLimit: 700,
 	},
 	optimizeDeps: {
 		// verifiablejs uses static WASM imports — exclude from pre-bundling
