@@ -470,36 +470,39 @@ export default function AccountsPage() {
 						))}
 					</div>
 				) : (
-					<p className="text-sm text-text-muted">
-						No browser extension wallets detected. Install{" "}
-						<a
-							href="https://polkadot.js.org/extension/"
-							target="_blank"
-							rel="noopener noreferrer"
-							className="text-polka-400 underline hover:text-polka-300"
-						>
-							Polkadot.js
-						</a>
-						,{" "}
-						<a
-							href="https://www.talisman.xyz/"
-							target="_blank"
-							rel="noopener noreferrer"
-							className="text-polka-400 underline hover:text-polka-300"
-						>
-							Talisman
-						</a>
-						, or{" "}
-						<a
-							href="https://www.subwallet.app/"
-							target="_blank"
-							rel="noopener noreferrer"
-							className="text-polka-400 underline hover:text-polka-300"
-						>
-							SubWallet
-						</a>{" "}
-						to connect.
-					</p>
+					<div className="space-y-2">
+						<p className="text-sm text-text-muted">
+							No browser extension wallets detected. If you have{" "}
+							<a
+								href="https://polkadot.js.org/extension/"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-polka-400 underline hover:text-polka-300"
+							>
+								Polkadot.js
+							</a>
+							,{" "}
+							<a
+								href="https://www.talisman.xyz/"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-polka-400 underline hover:text-polka-300"
+							>
+								Talisman
+							</a>
+							, or{" "}
+							<a
+								href="https://www.subwallet.app/"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-polka-400 underline hover:text-polka-300"
+							>
+								SubWallet
+							</a>{" "}
+							installed, click its icon in the toolbar to wake it up, then hit{" "}
+							<strong className="text-text-secondary">Rescan</strong>.
+						</p>
+					</div>
 				)}
 			</div>
 		</div>
