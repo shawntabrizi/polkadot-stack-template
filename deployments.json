@@ -1,6 +1,6 @@
 {
-  "medicalMarket": "0x3ed62137c5db927cb137c26455969116bf0c23cb",
-  "medicAuthority": "0x962c0940d72e7db6c9a5f81f1ca87d8db2b82a23",
+  "medicalMarket": "0x368fe3c24df0c8493c718cafcb11f4294b2c42ef",
+  "medicAuthority": "0xa9d46878afbe943ae4c955048ed8ecba190530d3",
   "multisig": {
     "ss58": "5Drae25fn2KwZKuST7LCvB7D4rdyqFoMAdSD4CEdQPuQr2Lk",
     "h160": "0x1597f37473220526382eb1a190a4fd97e7270648",
