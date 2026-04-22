@@ -41,7 +41,6 @@ MedicalMarket.sol (Phase 0a)
 - Encryption of any kind
 - Medic signatures
 - Merkle trees
-- Semaphore
 - ZK proofs
 - Atomic swap
 
@@ -80,7 +79,6 @@ MedicalMarket.sol (Phase 0b)
 **No:**
 - Medic signatures
 - Merkle trees
-- Semaphore
 - ZK proofs
 - Atomic swap (patient still acts after payment — trust required)
 
@@ -103,7 +101,6 @@ Merkle root, not a raw hash.
 
 **What stays the same:**
 - Manual key release (no ZK, no atomic swap)
-- No Semaphore
 
 **New tool:**
 ```
@@ -118,27 +115,27 @@ on-chain. Patient can later prove field inclusion against that root (needed for 
 
 ---
 
-## Phase 2: Mixer Box + Semaphore Group
+## Phase 2: People Chain Identity Gate (supersedes Semaphore approach)
 
-**Goal**: Anonymous medic onboarding works. The Semaphore group exists on Asset Hub.
+**Goal**: Medic verification via People Chain `pallet-identity`. The frontend reads
+`KnownGood` judgements via PAPI before allowing signing or listing.
 
 **What changes:**
-- Deploy Semaphore group contract on Asset Hub (via `resolc`)
-- Build Mixer Box backend (Node.js): receives commitment + People Chain signature, verifies
-  `KnownGood`, calls `addMember()`
-- Medic onboarding UI: generate Semaphore identity in browser, sign, submit to Mixer Box
-- Mock People Chain registrar script (no real People Chain needed yet — a local Node.js script
-  that simulates `KnownGood` responses)
+- Deploy local People Chain (or chopsticks fork of `people-paseo`) with Alice as registrar
+- Medic calls `set_identity` with BabyJubJub pubkey in `additional` field
+- Authority (Alice) issues `KnownGood` via `provide_judgement`
+- Frontend gate in `MedicSign` and listing browse: query `identityOf` via PAPI, reject
+  medics without `KnownGood` from the trusted registrar index
 
 **What stays the same:**
 - Manual key release (no ZK, no atomic swap)
 - No ZK proofs yet
 
-**Milestone check**: A medic generates a Semaphore identity. The Mixer Box adds them to the
-group on Asset Hub. A second medic can be added. Revocation removes them. All verifiable
-on-chain.
+**Milestone check**: A medic registers on the local People Chain fork and receives `KnownGood`.
+The frontend reads the judgement via PAPI and renders the verified badge. A medic without
+`KnownGood` is blocked from signing.
 
-**External dependency risk**: `resolc` compilation of the Semaphore verifier contract.
+**External dependency risk**: `people-paseo` chopsticks fork availability.
 Log any issues immediately in `EXTERNAL_DEPS.md`.
 
 ---
@@ -168,24 +165,28 @@ Log in `EXTERNAL_DEPS.md`. Continue Phase 3 on EVM. Do not block.
 
 ---
 
-## Phase 4: Add Semaphore to Circuit
+## Phase 4: Circuit Tightening (Merkle + EdDSA + ECDH)
 
-**Goal**: Medic anonymity is proven on-chain. The circuit now proves "a verified medic signed
-this" without revealing which one.
+**Goal**: The circuit proves the full ZKCP: Merkle inclusion, medic EdDSA signature, and
+designated-buyer ECDH encryption. Medic anonymity is not a circuit property — the medic is
+identified by their People Chain account.
 
 **What changes:**
-- Extend Circom circuit: add Semaphore group membership proof (medic's Semaphore identity is
-  a private input; group root is a public input)
-- Nullifier hash prevents double-use of same attestation
+- Extend Circom circuit: add ECDH (`@zk-kit/poseidon-cipher`) + Poseidon encryption of
+  disclosed fields, binding ciphertext to `PK_buyer` as public input
+- Nullifier (external, per buy-order) prevents replay
 - Contract checks nullifier has not been used
 
 **What stays the same:**
-- Manual key release (patient still submits decryption key)
-- No ECDH encryption yet
+- Patient still calls `fulfill()` after proof generation
+- No on-chain ECDH verification yet
 
-**Milestone check**: Patient generates proof that includes Semaphore group membership. Two
-different Semaphore identities produce different nullifiers. Replaying the same proof is
-rejected by the contract.
+**Milestone check**: Patient generates proof binding Merkle root + EdDSA sig + ciphertext
+to the buyer's pubkey. The same proof cannot be replayed for a different order.
+
+**Note**: Semaphore group membership was part of the earlier circuit design but is dropped
+in favour of the People Chain identity gate (Phase 2 / Phase 7). The medic is not anonymous
+on-chain; they are verifiable via People Chain `KnownGood`.
 
 ---
 
@@ -215,9 +216,13 @@ reclaim window. See `docs/product/ZKCP_DESIGN_OPTIONS.md` for the decision recor
 
 **What changed from Phase 5:**
 - `fulfill()` takes `(orderId, ephPkX, ephPkY, ciphertextHash)` — no proof, no nullifier
-- `recordCommit` is `HashChain32(plaintext[32])` — not a Merkle root; no Merkle tree
-- The medic's EdDSA-Poseidon signature over `recordCommit` is published **on-chain** with
-  the listing (not kept as a private circuit input); any researcher can pre-verify the medic
+- Record is split into **header** (public, browsable: `title`, `recordType`, `recordedAt`,
+  `facility`) and **body** (encrypted). The medic signs
+  `recordCommit = Poseidon2(headerCommit, bodyCommit)` where
+  `headerCommit = Poseidon8(encodeHeader(header))` and
+  `bodyCommit = HashChain32(body_plaintext[32])`
+- The full medic signature is published **on-chain** with the listing; any researcher can
+  pre-verify the medic before paying
 - Ciphertext uploaded to **Statement Store** (`pallet-statement`); only
   `ciphertextHash = HashChain32(ciphertext[32])` lands on-chain
 - Settlement in native PAS (not USDT/USDC)
@@ -225,6 +230,9 @@ reclaim window. See `docs/product/ZKCP_DESIGN_OPTIONS.md` for the decision recor
   `map_account`-registered (see `deployments.json`)
 - Encryption: ECDH(ephSk, pkBuyer) → shared point → Poseidon stream cipher
   (`ct[i] = (pt[i] + poseidon4([shX, shY, nonce, i])) % BN254_R`)
+- New `shareRecord()` function: patient shares a medic-signed record directly with a
+  doctor's BabyJubJub pubkey — pure event emission, no escrow. Doctor reads inbox via
+  `RecordShared` logs filtered by their `pkX` (indexed)
 
 **Trust model**: a dishonest patient can upload garbage ciphertext and collect payment.
 Buyer detects this by recomputing `HashChain32(plaintext) != listing.recordCommit` or
@@ -313,17 +321,11 @@ deploy is already in.
 
 ---
 
-## Phase 7: Polkadot System-Chain Composition
+## Phase 7: Polkadot System-Chain Composition (Live Paseo)
 
-**Goal**: Replace in-protocol anonymity with Polkadot system-chain composition. Medic
-verification moves to People Chain; admin governance moves to an Asset Hub multisig. The
-marketplace consumes both via PAPI. Supersedes Phase 2 and the Semaphore extension in Phase 4.
-
-**Design pivot — what this drops:**
-- Semaphore group contract and anonymous medic group membership
-- Mixer Box backend
-- Semaphore / nullifier extension of the circuit (Phase 4)
-- Medic anonymity — medics are identified by their People Chain account
+**Goal**: Complete the People Chain identity integration on live Paseo testnet. Admin
+governance uses the deployed Asset Hub multisig. The marketplace consumes both via PAPI.
+Medics are identified by their People Chain account — no anonymity layer.
 
 **What changes:**
 - **Multisig Certifying Authority on Asset Hub (`pallet-multisig`)**: create an N-of-M multisig
@@ -366,15 +368,15 @@ unchanged.
 |---|---|---|---|---|
 | 0a | Full disclosure skeleton | Money moves, data readable | Yes (fully open) | Done |
 | 0b | Encryption + manual key | Data private, manual release | Yes (patient must cooperate) | Done |
-| 1 | Merkle + EdDSA signing | Correct data structure | Yes | Done |
-| 2 | Mixer Box + Semaphore group | Anonymous medic onboarding | Yes | Planned (Phase 7 supersedes) |
+| 1 | Header/body split + EdDSA signing | Correct data structure | Yes | Done |
+| 2 | People Chain identity gate | Verified medics via KnownGood | Yes | Planned |
 | 3 | First ZK circuit (Merkle only) | ZK proof verified on PVM | Yes | Planned |
-| 4 | Semaphore in circuit | Medic anonymity proven on-chain | Yes | Planned (Phase 7 supersedes) |
+| 4 | Circuit: EdDSA + ECDH | Full ZKCP without anonymity layer | Yes | Planned |
 | 5 | ECDH + Poseidon (full ZKCP) | Atomic swap | **No** | Planned |
-| **5.2** | **Off-chain verification (no ZK)** | **Encrypted delivery, relaxed atomicity** | **Yes (buyer trusts patient)** | **Shipped** |
+| **5.2** | **Off-chain verification + doctor share** | **Encrypted delivery, relaxed atomicity** | **Yes (buyer trusts patient)** | **Shipped** |
 | 5.3 | Buyer reclaim window | Off-chain trust backstop | Yes (time-bounded) | Planned |
 | 6 | Frontend + Paseo | Demonstrable product | Inherits 5.2 | In progress |
-| 7 | Multisig CA + People Chain identity | Verified medics via system chains (supersedes 2 & 4) | Inherits Phase 5.2 | Partial (multisig deployed) |
+| 7 | Multisig CA + People Chain identity | Verified medics via system chains | Inherits Phase 5.2 | Partial (multisig deployed) |
 
 The trust column shows the honest story: phases 0a through 4 all require the patient to
 cooperate after payment. Phase 5 is when the protocol becomes genuinely trustless. Every

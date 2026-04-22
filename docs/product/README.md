@@ -23,14 +23,15 @@ Read in this order:
 
 ## Current Stage
 
-Two-week MVP. Two-chain architecture: People Chain (identity) + Asset Hub (execution + settlement).
-Off-chain Mixer Box bridges async identity to synchronous contract state.
-Smart contracts via `pallet-revive`. Synthetic test data only.
+**Phase 5.2 deployed (2026-04).** Asset Hub contract (`MedicalMarket.sol`) handles listing,
+escrow, fulfillment, and patient→doctor direct share. Record is split into a browsable
+medic-signed header (stored in the clear) and an encrypted body. Statement Store delivers
+ciphertext; only the Poseidon hash lands on-chain. No ZK proof, no Semaphore, no IPFS.
+People Chain identity (Phase 7) and on-chain ZK proof (Phase 6) are planned next steps.
+Synthetic test data only.
 
 ## Open Questions (Unresolved)
 
-1. **IPFS availability at fulfillment** — hash anchoring proves integrity, not availability. MVP recommendation: patient submits encrypted blob as calldata in `fulfill()`. Bond-based approach is V2. See `ARCHITECTURE.md`.
-2. **Circuit constraint count** — must measure on Day 8 before writing `MedicalMarket.sol`. Target < 2M for browser proving. Fallback: split into two sequential proofs.
-3. **Certifying Authority governance model** — multisig recommended for MVP. DAO is V2.
-4. **GDPR / HIPAA compliance** — legal opinion required before real patient data.
-5. **Dispute resolution** — out of scope for MVP.
+1. **Certifying Authority governance model** — 2-of-3 pallet-multisig deployed for MVP. DAO is V2.
+2. **GDPR / HIPAA compliance** — legal opinion required before real patient data.
+3. **Dispute resolution** — out of scope for MVP. Phase 5.3 adds a buyer reclaim window for bad ciphertext.

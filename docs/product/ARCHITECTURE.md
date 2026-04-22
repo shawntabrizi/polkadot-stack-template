@@ -2,70 +2,53 @@
 
 ## Overview: Two-Chain Design
 
-All execution and settlement lives on Asset Hub. People Chain handles professional identity
-asynchronously via an off-chain Authority backend. No Bulletin Chain, no XCM synchronous reads,
-no BBS+ pairing operations.
+Execution and settlement live on Asset Hub. People Chain provides professional identity via
+`pallet-identity` in Phase 7 — not yet in the runtime. No Semaphore, no Mixer Box, no BBS+.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         PEOPLE CHAIN                                 │
-│  Identity Pallet                                                     │
+│                    PEOPLE CHAIN (Phase 7 — planned)                  │
+│  pallet-identity                                                     │
 │  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  Medic on-chain identity (name, medical license ID)            │  │
+│  │  Medic identity (name, BabyJubJub pubkey in `additional`)      │  │
 │  │  Central Authority = on-chain Registrar                        │  │
 │  │  Judgement: "Known Good" issued per verified medic             │  │
 │  └────────────────────────────────────────────────────────────────┘  │
 └──────────────────────┬───────────────────────────────────────────────┘
-                       │ off-chain query
-                       │ (async — no XCM precompile needed)
+                       │ PAPI read (frontend, async)
 ┌──────────────────────▼───────────────────────────────────────────────┐
-│                    MIXER BOX (Authority Backend)                     │
-│  Off-chain Node.js service                                           │
-│  1. Medic submits: Semaphore commitment + People Chain signature     │
-│  2. Backend verifies: KnownGood judgement on People Chain            │
-│  3. Backend calls: addMember(commitment) on Asset Hub (admin key)    │
-│  4. Maintains private: {address → commitment} for revocation         │
-│                                                                      │
-│  Result: on-chain, only the Authority account added a commitment.    │
-│  No transaction links medic wallet to Semaphore commitment.          │
-└──────────────────────┬───────────────────────────────────────────────┘
-                       │ contract calls
-┌──────────────────────▼───────────────────────────────────────────────┐
-│                         ASSET HUB                                    │
+│                    ASSET HUB (deployed — Phase 5.2)                  │
 │  pallet-revive · Solidity → resolc → PVM (RISC-V)                   │
 │                                                                      │
-│  ┌─────────────────────┐  ┌──────────────────────────────────────┐   │
-│  │  Semaphore Group    │  │  MedicalMarket.sol                   │   │
-│  │  addMember()        │  │  placeBuyOrder(criteria, price,      │   │
-│  │  removeMember()     │  │               pk_buyer)              │   │
-│  │  verifyProof()      │  │  fulfill(proof, ciphertext,          │   │
-│  └─────────────────────┘  │           nullifier, ipfs_cid)      │   │
-│                           │  → verify proof                      │   │
-│  ┌─────────────────────┐  │  → release USDT/USDC to patient     │   │
-│  │  ZK Verifier        │  │  → emit ciphertext + CID to buyer   │   │
-│  │  (Groth16, via      │  └──────────────────────────────────────┘   │
-│  │   resolc to PVM)    │                                             │
-│  └─────────────────────┘  Contract state anchors:                   │
-│                           - Blake2b/Poseidon hash of encrypted blob  │
-│                           - IPFS CID                                 │
-│                           - Buyer's PK_buyer (BabyJubJub)           │
-└──────────────────────────────────────────────────────────────────────┘
-                       │ read CID after purchase
+│  ┌──────────────────────────────────────────────────────────────────┐ │
+│  │  MedicalMarket.sol                                               │ │
+│  │  createListing(header, headerCommit, bodyCommit, medicSig, price)│ │
+│  │  placeBuyOrder(listingId, pkBuyerX, pkBuyerY) payable           │ │
+│  │  fulfill(orderId, ephPkX, ephPkY, ciphertextHash)               │ │
+│  │  shareRecord(header, commits, medicSig, doctorPk, ephPk, ...)   │ │
+│  │  → releases native PAS on fulfill; emits ephPk + ctHash         │ │
+│  └──────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│  2-of-3 pallet-multisig (Bob, Charlie, Alice; threshold=2)          │
+│  medicAuthority contract                                             │
+└──────────────────────┬───────────────────────────────────────────────┘
+                       │ ciphertextHash lookup
                        ▼
-                     IPFS
-              (patient-maintained pin)
+              Statement Store (pallet-statement)
+              (patient-uploaded ciphertext bytes)
 ```
 
-> **The diagram above is the Phase 3+ target architecture** (Semaphore Group, ZK Verifier,
-> IPFS). See [Current State (Phase 5.2)](#current-state-phase-52) below for what is deployed today.
+> **Phase 5.2 is the current deployed runtime.** See [Current State (Phase 5.2)](#current-state-phase-52)
+> below. Phase 7 wires People Chain `KnownGood` judgements into the medic browse/listing flow.
 
 ---
 
 ## Current State: Phase 5.2
 
-Phase 5.2 is the deployed runtime as of 2026-04. **No on-chain ZK proof, no Semaphore Group,
-no IPFS.** The contract is a pure escrow + signal layer; atomicity is relaxed (Phase 5.3 will
-add a reclaim window). The archived circuit + verifier live in `circuits/` and
+Phase 5.2 is the deployed runtime as of 2026-04. **No on-chain ZK proof, no Semaphore, no IPFS.**
+The record is split into a browsable medic-signed header (stored in the clear on-chain) and an
+encrypted body. The medic signs `Poseidon2(headerCommit, bodyCommit)`. Atomicity is relaxed
+(Phase 5.3 will add a reclaim window). The archived circuit + verifier live in `circuits/` and
 `contracts/pvm/contracts/Verifier.sol`; see `docs/product/ZKCP_DESIGN_OPTIONS.md` for the
 decision record.
 
@@ -76,14 +59,20 @@ decision record.
 
 ```solidity
 struct Listing {
-    uint256 recordCommit;  // HashChain32(plaintext[32]) — what the medic signed
-    uint256 medicPkX;      // medic's BabyJubJub pubkey (EdDSA-Poseidon)
+    // Header — stored in the clear; browsable before purchase
+    string  title;
+    string  recordType;
+    uint64  recordedAt;
+    string  facility;
+    uint256 headerCommit; // Poseidon8(encodeHeader(header))
+    uint256 bodyCommit;   // HashChain32(body_plaintext[32])
+    // Medic attestation — signs Poseidon2(headerCommit, bodyCommit)
+    uint256 medicPkX;
     uint256 medicPkY;
-    uint256 sigR8x;        // medic's EdDSA signature over recordCommit
+    uint256 sigR8x;
     uint256 sigR8y;
     uint256 sigS;
-    string  title;
-    uint256 price;         // minimum in wei (native PAS)
+    uint256 price;        // minimum in wei (native PAS)
     address patient;
     bool    active;
 }
@@ -91,10 +80,10 @@ struct Listing {
 struct Order {
     uint256 listingId;
     address researcher;
-    uint256 amount;        // native PAS locked
+    uint256 amount;       // native PAS locked
     bool    confirmed;
     bool    cancelled;
-    uint256 pkBuyerX;      // researcher's BabyJubJub pubkey for ECDH
+    uint256 pkBuyerX;     // researcher's BabyJubJub pubkey for ECDH
     uint256 pkBuyerY;
 }
 
@@ -106,106 +95,115 @@ struct Fulfillment {
 ```
 
 ```solidity
-event ListingCreated(address indexed patient, uint256 indexed listingId,
-    uint256 recordCommit, uint256 medicPkX, uint256 medicPkY, string title, uint256 price);
-event OrderPlaced(uint256 indexed listingId, uint256 indexed orderId,
-    address indexed researcher, uint256 amount, uint256 pkBuyerX, uint256 pkBuyerY);
-event SaleFulfilled(uint256 indexed orderId, uint256 indexed listingId,
+event ListingCreated(
+    address indexed patient,
+    uint256 indexed listingId,
+    uint256 headerCommit, uint256 bodyCommit,
+    uint256 medicPkX, uint256 medicPkY,
+    string title, string recordType, uint64 recordedAt, string facility,
+    uint256 price
+);
+event OrderPlaced(
+    uint256 indexed listingId, uint256 indexed orderId,
+    address indexed researcher, uint256 amount, uint256 pkBuyerX, uint256 pkBuyerY
+);
+event SaleFulfilled(
+    uint256 indexed orderId, uint256 indexed listingId,
     address patient, address researcher,
-    uint256 ephPkX, uint256 ephPkY, uint256 ciphertextHash);
+    uint256 ephPkX, uint256 ephPkY, uint256 ciphertextHash
+);
+event RecordShared(
+    address indexed patient,
+    uint256 indexed doctorPkX, uint256 doctorPkY,
+    uint256 headerCommit, uint256 bodyCommit,
+    uint256 medicPkX, uint256 medicPkY,
+    uint256 sigR8x, uint256 sigR8y, uint256 sigS,
+    uint256 ephPkX, uint256 ephPkY, uint256 ciphertextHash,
+    string title, string recordType, uint64 recordedAt, string facility
+);
 ```
 
 ### Phase 5.2 Contract Interface
 
 ```solidity
-// Patient: publish listing. Medic sig stored on-chain; researcher can pre-verify before paying.
+// Patient: publish listing. Header in clear; medic sig over Poseidon2(headerCommit, bodyCommit).
+// Researchers recompute headerCommit off-chain and verify sig before placing an order.
 createListing(
-    uint256 recordCommit,
+    HeaderInput calldata header,  // {title, recordType, recordedAt, facility}
+    uint256 headerCommit,         // Poseidon8(encodeHeader(header))
+    uint256 bodyCommit,           // HashChain32(body_plaintext[32])
     uint256 medicPkX, uint256 medicPkY,
-    uint256 sigR8x,   uint256 sigR8y, uint256 sigS,
-    string calldata title,
+    uint256 sigR8x, uint256 sigR8y, uint256 sigS,
     uint256 price
 )
 
 // Researcher: lock native PAS + register BabyJubJub pubkey (must send ≥ listing.price).
+// Outbid: if a pending order exists, new offer must exceed it; old order auto-refunded.
 placeBuyOrder(uint256 listingId, uint256 pkBuyerX, uint256 pkBuyerY) payable
 
 // Patient: declare ephemeral key + ciphertext hash; releases listing.price to patient.
-// No on-chain proof. Buyer verifies (HashChain32 == recordCommit, EdDSA sig) off-chain.
+// No on-chain proof. Buyer verifies (bodyCommit, headerCommit, EdDSA sig) off-chain.
 fulfill(uint256 orderId, uint256 ephPkX, uint256 ephPkY, uint256 ciphertextHash)
+
+// Patient: share a medic-signed record directly with a doctor's BabyJubJub pubkey.
+// Pure event emission — no storage, no escrow. Doctor reads RecordShared logs
+// filtered by their own pkX (indexed).
+shareRecord(
+    HeaderInput calldata header,
+    uint256 headerCommit, uint256 bodyCommit,
+    uint256 medicPkX, uint256 medicPkY,
+    uint256 sigR8x, uint256 sigR8y, uint256 sigS,
+    uint256 doctorPkX, uint256 doctorPkY,
+    uint256 ephPkX, uint256 ephPkY,
+    uint256 ciphertextHash
+)
 
 cancelListing(uint256 listingId)   // only if no pending order
 cancelOrder(uint256 orderId)       // researcher refunded in full
+
+getListingHeader(uint256 id)       // returns (title, recordType, recordedAt, facility)
 ```
 
-### Phase 5.2 Off-Chain Verification (buyer)
+### Phase 5.2 Off-Chain Verification (buyer / doctor)
 
 After fetching ciphertext from the Statement Store and decrypting via ECDH + Poseidon stream cipher:
-1. `HashChain32(plaintext) == listing.recordCommit` — proves the plaintext matches what was signed
-2. `EdDSA.verify(listing.medicPk, listing.sig, listing.recordCommit)` — proves a known medic signed it
+1. `HashChain32(body_plaintext) == listing.bodyCommit` — proves the decrypted body matches what was signed
+2. `Poseidon8(encodeHeader(header)) == listing.headerCommit` — proves the browsed header fields are intact
+3. `EdDSA.verify(medicPk, sig, Poseidon2(headerCommit, bodyCommit))` — proves a known medic signed the combined record
 
-`HashChain32(x[32]) = poseidon2(poseidon16(x[0..16]), poseidon16(x[16..32]))` — see `web/src/utils/zk.ts`.
-Both checks render as ✓/✗ chips in `ResearcherBuy.tsx`.
+All three checks render as ✓/✗ chips in `ResearcherBuy.tsx` and `DoctorInbox.tsx`.
+
+`HashChain32(x[32]) = poseidon2(poseidon16(x[0..16]), poseidon16(x[16..32]))` — `computeBodyCommit` in `web/src/utils/zk.ts`.  
+`Poseidon8` covers the 8-slot encoded header — `computeHeaderCommit` in `web/src/utils/zk.ts`.  
+`recordCommit = Poseidon2(headerCommit, bodyCommit)` — `computeRecordCommit`; this is what the medic signs.
 
 ---
 
-## Layer 1: People Chain (Professional Credentialing)
+## Layer 1: People Chain (Professional Credentialing — Phase 7)
 
 The Central Authority registers as an on-chain **Registrar** on the People Chain and issues
 `KnownGood` judgements to verified medics after off-chain credential verification.
 
 This replaces any custom registry contract. The People Chain identity system is battle-tested
-and provides a globally recognizable professional credential.
+and provides a globally recognizable professional credential. The medic embeds their BabyJubJub
+signing pubkey in an `additional` field of `IdentityInfo` keyed as `"babyjub_pubkey"`. The
+`KnownGood` judgement implicitly covers that key binding.
 
-**No synchronous XCM queries**: The identity check happens off-chain in the Mixer Box before
-the medic is added to the Semaphore group. Once in the group, the marketplace contract verifies
-credentials by checking the local Semaphore group root — a synchronous, cheap operation with
-~500ms confirmation times.
-
----
-
-## Layer 2: Mixer Box (Authority Backend)
-
-An off-chain Node.js service that bridges asynchronous People Chain identity to synchronous
-Asset Hub contract state.
-
-**Blind Registration flow:**
-1. Medic generates Semaphore identity locally (trapdoor + nullifier → commitment). Private
-   keys never leave the device.
-2. Medic signs: `"Registering Semaphore commitment [X]"` with their People Chain wallet.
-3. Medic submits signature + commitment to Mixer Box via the frontend.
-4. Mixer Box:
-   - Verifies signature against the People Chain address.
-   - Checks that address has `KnownGood` from the Authority registrar.
-5. Mixer Box calls `addMember(commitment)` on the Semaphore contract **from the Authority
-   admin account**. No on-chain link to the medic's wallet.
-
-**Revocation flow:**
-1. Authority revokes `KnownGood` on People Chain.
-2. Mixer Box calls `removeMember(commitment)` using the private `{address → commitment}` mapping.
-3. This mapping is the only link between identity and anonymity. Must never be published.
-
-**Build estimate**: ~1–2 days. Express endpoint + polkadot.js query + contract call.
+**No synchronous XCM queries**: The identity check happens in the frontend via PAPI when
+researchers browse listings or medics prepare to sign. The verified-name badge is rendered
+based on a `KnownGood` judgement from the configured trusted `RegistrarIndex`.
 
 ---
 
-## Layer 3: Asset Hub (Execution and Settlement)
+## Layer 2: Asset Hub (Execution and Settlement)
 
-### Data Anchoring (Phase 3+ Planned)
+### Data Anchoring (Phase 5.2 — current)
 
-> **Phase 5.2 (current)**: Ciphertext is uploaded to the **Statement Store** (`pallet-statement`),
-> not IPFS. Only `ciphertextHash = HashChain32(ciphertext[32])` lands on-chain, in the
-> `Fulfillment` struct. The researcher fetches the ciphertext from the Statement Store after
-> observing `SaleFulfilled`. No `recordCommit` in the listing is a Merkle root — it is
-> `HashChain32(plaintext[32])`.
-
-When a record is listed in the full ZK architecture (Phase 3+), the patient stores two pieces
-of data in the marketplace contract:
-
-1. **Merkle root**: Poseidon Merkle root of the record's attribute tree.
-2. **Data hash**: Hash of the complete encrypted blob for integrity checking.
-
-The ZK proof binds the buyer's `PK_buyer` to the specific hash stored in the contract.
+> Ciphertext is uploaded to the **Statement Store** (`pallet-statement`), not IPFS. Only
+> `ciphertextHash = HashChain32(ciphertext[32])` lands on-chain, in the `Fulfillment` struct.
+> The researcher fetches the ciphertext from the Statement Store after observing `SaleFulfilled`.
+> `recordCommit = Poseidon2(headerCommit, bodyCommit)` — what the medic signs; not stored
+> directly, only `headerCommit` and `bodyCommit` are stored separately in the Listing.
 
 **Availability note**: Hash anchoring proves integrity but not availability. Phase 5.3 adds an
 escrow/acknowledge/reclaim window so a buyer who gets a bad ciphertext can recover payment.
@@ -215,23 +213,19 @@ A bond-based IPFS availability mechanism is V2.
 
 | Component | Logic | Tooling | Audit status |
 |---|---|---|---|
-| Trust | Verify doctor's license | People Chain (async via Mixer Box) | — |
-| Integrity | Merkle root signature | `@zk-kit/eddsa-poseidon` (BabyJubJub EdDSA) | Semaphore V4 audit (Mar 2024) |
-| Commitment | JSON field tree | `@zk-kit/lean-imt` (Poseidon Merkle tree) | Production-used |
-| Anonymity | Signer privacy | Semaphore v4 (built on zk-kit) | Semaphore V4 audit |
-| Designated encryption | Buyer-specific ciphertext | `@zk-kit/poseidon-cipher` (ECDH + Poseidon) | Production-used |
-| Escrow + atomic swap | Settlement | `MedicalMarket.sol` on PVM | — |
-| Anchoring | Hash/CID storage | Asset Hub contract state | — |
+| Trust | Verify doctor's license | People Chain pallet-identity (Phase 7, async via PAPI) | — |
+| Header integrity | Browse-time verification | `poseidon-lite` Poseidon8 | Production-used |
+| Body integrity | Post-decrypt verification | `poseidon-lite` HashChain32 | Production-used |
+| Medic signature | EdDSA over Poseidon2(headerCommit, bodyCommit) | `@zk-kit/eddsa-poseidon` (BabyJubJub EdDSA) | Semaphore V4 audit (Mar 2024) |
+| Designated encryption | Buyer/doctor-specific ciphertext | `@zk-kit/poseidon-cipher` (ECDH + Poseidon) | Production-used |
+| Escrow + settlement | Payment release | `MedicalMarket.sol` on PVM | — |
+| Anchoring | Hash storage | Asset Hub contract state | — |
 
 **zk-kit** (`@privacy-scaling-explorations/zk-kit`) provides audited, browser-compatible implementations
 of EdDSA, ECDH, Poseidon encryption, and Merkle trees — all in TypeScript with matching Circom
-circuit packages. Semaphore v4 is built on it. Use it directly rather than custom implementations.
+circuit packages. Use it directly rather than custom implementations.
 
-**POD** (`pod.org`, 0xPARC) provides General Purpose Circuits for selective disclosure and has
-native Semaphore integration. However, it is explicitly experimental with no security audit.
-Consider for V2 if you want pre-built configurable circuits. Skip for MVP.
-
-### The ZK Circuit (Phase 3+ Planned — not in current runtime)
+### The ZK Circuit (Phase 6+ — archived, not in current runtime)
 
 One Groth16 circuit (Circom) proves all of the following:
 
@@ -241,13 +235,10 @@ Private inputs:
   - Merkle inclusion paths for the disclosed fields
   - Medic's EdDSA signature over the Merkle root
   - Patient's ephemeral BabyJubJub private key (for ECDH)
-  - Semaphore identity (trapdoor, nullifier)
 
 Public inputs:
   - Merkle root (matches the on-chain commitment)
   - Disclosed field values (what the researcher sees)
-  - Semaphore group root (matches on-chain Semaphore state)
-  - Semaphore nullifier hash (replay prevention)
   - Buyer's BabyJubJub public key PK_buyer
   - Poseidon ciphertext (encrypted disclosed fields)
   - External nullifier (ties proof to this specific buy order)
@@ -255,17 +246,15 @@ Public inputs:
 The circuit proves:
   1. Signature: The medic's EdDSA sig is valid over the Merkle root.
   2. Inclusion: The disclosed fields are leaves of that Merkle root.
-  3. Anonymity: The signing medic is a member of the Semaphore group.
-  4. Encryption: The ciphertext = PoseidonEncrypt(disclosed_fields,
+  3. Encryption: The ciphertext = PoseidonEncrypt(disclosed_fields,
                    ECDH(patient_ephemeral_key, PK_buyer))
 ```
 
 Only the researcher holding the private key for `PK_buyer` can decrypt the ciphertext.
 
-**Why this circuit is achievable in 2–3 days**: All four components use circomlib primitives
-(`EdDSA`, `MerkleProof`, `Poseidon`, `Semaphore`). No BLS12-381 pairing operations.
-No BBS+. Estimated constraint count: 200k–500k R1CS constraints — well within browser
-proving limits.
+**Why this circuit is achievable**: All components use circomlib primitives
+(`EdDSA`, `MerkleProof`, `Poseidon`). No BLS12-381 pairing operations.
+Estimated constraint count: 200k–500k R1CS constraints — well within browser proving limits.
 
 ### Patient Data Ownership Layer
 
@@ -273,8 +262,8 @@ Patients are data owners, not just sellers. The system must make this real in th
 
 **What the patient always retains:**
 
-- The signed package JSON (stored in browser localStorage / Host KV as `signed-pkg:<hash>`),
-  which contains `plaintext[32]` — the patient can re-read their own record at any time.
+- The signed package JSON (stored in browser localStorage / Host KV as `signed-pkg:<recordCommit>`),
+  which contains `body_plaintext[32]` — the patient can re-read their own record at any time.
 - The ability to read their own records in plaintext in the dashboard.
 
 Note: in Phase 5.2 there is no IPFS blob. The patient's own plaintext lives entirely in
@@ -285,14 +274,18 @@ is not affected.
 
 ```solidity
 struct Listing {
-    uint256 recordCommit;  // HashChain32(plaintext[32]) — what the medic signed
-    uint256 medicPkX;      // medic's BabyJubJub pubkey (public)
+    string  title;
+    string  recordType;
+    uint64  recordedAt;
+    string  facility;
+    uint256 headerCommit; // Poseidon8(encodeHeader(header))
+    uint256 bodyCommit;   // HashChain32(body_plaintext[32])
+    uint256 medicPkX;
     uint256 medicPkY;
-    uint256 sigR8x;        // EdDSA signature over recordCommit (public)
+    uint256 sigR8x;
     uint256 sigR8y;
     uint256 sigS;
-    string  title;
-    uint256 price;         // minimum in wei (native PAS)
+    uint256 price;
     address patient;
     bool    active;
 }
@@ -326,13 +319,27 @@ can decrypt only the ciphertext produced for their `pkBuyer`; these are independ
 
 ### Contract Interface (Phase 5.2 — current)
 
+**Create listing** (patient):
+```solidity
+// Store header in clear + commits + medic sig. Medic signs Poseidon2(headerCommit, bodyCommit).
+createListing(
+    HeaderInput calldata header,  // {title, recordType, recordedAt, facility}
+    uint256 headerCommit,         // Poseidon8(encodeHeader(header))
+    uint256 bodyCommit,           // HashChain32(body_plaintext[32])
+    uint256 medicPkX, uint256 medicPkY,
+    uint256 sigR8x, uint256 sigR8y, uint256 sigS,
+    uint256 price
+)
+```
+
 **Place buy order** (researcher):
 ```solidity
 // Lock native PAS; register BabyJubJub pubkey for ECDH. Must send ≥ listing.price.
+// Outbid: if a pending order exists, new offer must exceed it; old order auto-refunded.
 placeBuyOrder(
-    uint256 listingId,    // which listing to buy
-    uint256 pkBuyerX,     // researcher's BabyJubJub public key X coordinate
-    uint256 pkBuyerY      // researcher's BabyJubJub public key Y coordinate
+    uint256 listingId,
+    uint256 pkBuyerX,
+    uint256 pkBuyerY
 ) payable
 ```
 Researcher commits `pkBuyer` on-chain. Patient reads it from the order to derive the ECDH
@@ -340,11 +347,11 @@ shared secret and produce the buyer-specific ciphertext.
 
 **Fulfill order** (patient):
 ```solidity
-// Phase 5.2: no on-chain proof. Patient declares ephemeral key + ciphertext hash.
+// No on-chain proof. Patient declares ephemeral key + ciphertext hash.
 fulfill(
     uint256 orderId,
-    uint256 ephPkX,         // patient's ephemeral BabyJubJub pubkey X
-    uint256 ephPkY,         // patient's ephemeral BabyJubJub pubkey Y
+    uint256 ephPkX,
+    uint256 ephPkY,
     uint256 ciphertextHash  // HashChain32(ciphertext[32]); Statement Store lookup key
 )
 ```
@@ -353,9 +360,23 @@ Contract:
 2. Releases `listing.price` to patient; refunds excess to researcher.
 3. Emits `SaleFulfilled`. No proof verification — buyer verifies off-chain.
 
-> **Phase 3+ target**: `fulfill()` will also accept a Groth16 proof and Semaphore nullifier,
-> verify them against the on-chain verifier, and check the Merkle root matches the listing.
-> That makes the swap fully atomic (no off-chain trust required).
+**Share with doctor** (patient):
+```solidity
+// Pure event emission — no storage, no escrow.
+// Doctor reads RecordShared logs filtered by their pkX (indexed).
+shareRecord(
+    HeaderInput calldata header,
+    uint256 headerCommit, uint256 bodyCommit,
+    uint256 medicPkX, uint256 medicPkY,
+    uint256 sigR8x, uint256 sigR8y, uint256 sigS,
+    uint256 doctorPkX, uint256 doctorPkY,
+    uint256 ephPkX, uint256 ephPkY,
+    uint256 ciphertextHash
+)
+```
+
+> **Phase 6 target**: `fulfill()` will accept a Groth16 proof, verify against the on-chain
+> verifier, and check the Merkle root. That makes the swap fully atomic.
 
 ---
 
@@ -366,14 +387,14 @@ Contract:
 | Day | Work | Risk |
 |---|---|---|
 | 1–2 | Scaffold template. Deploy local Asset Hub. Mock People Chain registrar with a Node.js script. Verify `KnownGood` judgement flow end-to-end. | Low |
-| 3–4 | Build Mixer Box: Express endpoint + People Chain judgement check + `addMember` call. Deploy Semaphore group contract on Asset Hub via resolc. Verify `addMember` + `verifyProof` on PVM. **First critical checkpoint.** | Medium |
-| 5–7 | JSON-to-Merkle TypeScript utility. Medic signing tool: field → leaf → Merkle root → EdDSA signature with BabyJubJub. Unit tests for the Merkle construction. | Low–Medium |
+| 3–4 | Deploy `medicAuthority` contract. Wire 2-of-3 pallet-multisig. Verify `asMulti` flow on local Asset Hub. **First critical checkpoint.** | Medium |
+| 5–7 | JSON-to-field-element TypeScript utilities. Medic signing tool: encode header + body → compute commits → EdDSA sign `Poseidon2(headerCommit, bodyCommit)`. Unit tests. | Low–Medium |
 
 ### Week 2: Circuit and Marketplace
 
 | Day | Work | Risk |
 |---|---|---|
-| 8–10 | Circom circuit: Merkle inclusion + EdDSA verification + Semaphore + ECDH + Poseidon encryption. Compile to `.wasm` + `.zkey`. **Measure constraint count before proceeding.** Compile Groth16 verifier to Solidity, then resolc to PVM. **Second critical checkpoint.** | High |
+| 8–10 | Circom circuit: Merkle inclusion + EdDSA verification + ECDH + Poseidon encryption. Compile to `.wasm` + `.zkey`. **Measure constraint count before proceeding.** Compile Groth16 verifier to Solidity, then resolc to PVM. **Second critical checkpoint.** | High |
 | 11–12 | `MedicalMarket.sol`: `placeBuyOrder`, `fulfill`, escrow, atomic swap. Integration test: full flow on local PVM node. | Medium |
 | 13–14 | Frontend (v0 + PAPI + snarkjs): medic signing tool, patient listing + proving flow, researcher buy flow. End-to-end on Paseo testnet. | Medium |
 
@@ -381,9 +402,9 @@ Contract:
 
 | Checkpoint | Day | Pass condition | Fallback |
 |---|---|---|---|
-| PVM + Semaphore | 4 | `verifyProof` works on local Asset Hub with a test proof | Use pure Solidity verifier without PVM optimization for demo |
+| PVM + Verifier | 4 | Contract deployment and admin call succeed on local Asset Hub | Mock authority for demo |
 | Circuit constraint count | 8 | < 2M constraints for browser proving | Split into two sequential proofs verified by contract |
-| End-to-end on Paseo | 13 | Full buy flow completes with test USDT | Demo on local node only |
+| End-to-end on Paseo | 13 | Full buy flow completes with test PAS | Demo on local node only |
 
 ---
 
