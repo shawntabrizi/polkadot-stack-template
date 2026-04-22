@@ -5,7 +5,7 @@ import VerifiedBadge from "../components/VerifiedBadge";
 import Spinner from "../components/Spinner";
 import Toast from "../components/Toast";
 import { deployments } from "../config/deployments";
-import { subscribeStatements } from "../hooks/useStatementStore";
+import { subscribeStatements, fetchStatementByHash } from "../hooks/useStatementStore";
 import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
 import { useReviveCall } from "../hooks/useReviveCall";
 import { useChainStore } from "../store/chainStore";
@@ -391,13 +391,19 @@ export default function ResearcherBuy() {
 
 			setTxStatus("Fetching from Statement Store...");
 			const targetHashHex = uint256ToHashHex(ciphertextHash);
-			const matchedData = stmtCache.get(targetHashHex);
+			let matchedData = stmtCache.get(targetHashHex);
 
 			if (!matchedData) {
-				setTxStatus(
-					"Patient hasn't uploaded the ciphertext yet — check back in a few blocks.",
-				);
-				return;
+				setTxStatus("Cache miss — re-fetching from Statement Store...");
+				const fresh = await fetchStatementByHash(wsUrl, targetHashHex);
+				if (!fresh) {
+					setTxStatus(
+						"Patient hasn't uploaded the ciphertext yet — check back in a few blocks.",
+					);
+					return;
+				}
+				matchedData = fresh;
+				setStmtCache((prev) => new Map(prev).set(targetHashHex, fresh));
 			}
 
 			setTxStatus("Verifying ciphertext hash...");

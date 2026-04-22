@@ -407,6 +407,19 @@ export async function submitStatement(
 }
 
 /**
+ * One-shot fetch of a single statement by its blake2b-32 hash hex.
+ * Used as a cache-miss fallback in the decrypt flow so a stale mount-time
+ * cache doesn't block decryption after a recent fulfill.
+ */
+export async function fetchStatementByHash(
+	wsUrl: string,
+	hashHex: string,
+): Promise<Uint8Array | null> {
+	const stmts = await _rawFetch(wsUrl);
+	return stmts.find((s) => s.hash === hashHex)?.data ?? null;
+}
+
+/**
  * Subscribe to marketplace statements.
  *
  * - Inside Host: live subscription via SDK; `onUpdate` is called for each batch.
