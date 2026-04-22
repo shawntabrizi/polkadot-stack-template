@@ -20,7 +20,7 @@ var metadataTypes = import("./metadataTypes-T2DFLUK2.mjs").then(
 );
 var asset = {};
 var extensions = {};
-var getMetadata = () => import("./stack_template_metadata-SH4UQRTN.mjs").then(
+var getMetadata = () => import("./stack_template_metadata-MOUANYJC.mjs").then(
   (module) => toBinary("default" in module ? module.default : module)
 );
 var genesis = "0x130435bbe25dedf7272ae82474577e0fd799591d1ef43b1b883e2b1fd4c54050";

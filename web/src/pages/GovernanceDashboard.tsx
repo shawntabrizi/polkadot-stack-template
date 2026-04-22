@@ -66,8 +66,7 @@ function actionLabel(method: AuthorityMethod): string {
 	return {
 		addMedic: "Add Medic",
 		removeMedic: "Remove Medic",
-		addAuthority: "Add Authority",
-		removeAuthority: "Remove Authority",
+		transferOwnership: "Transfer Ownership",
 	}[method];
 }
 
@@ -83,10 +82,9 @@ export default function GovernanceDashboard() {
 	const [proposerIdx, setProposerIdx] = useState(0);
 	const [approverIdx, setApproverIdx] = useState(1);
 
-	// Authority / medic status
-	const [authStatuses, setAuthStatuses] = useState<Record<string, boolean | null>>({});
+	// Owner / medic status
+	const [contractOwner, setContractOwner] = useState<string | null>(null);
 	const [medicStatuses, setMedicStatuses] = useState<Record<string, boolean | null>>({});
-	const [authorityCount, setAuthorityCount] = useState<number | null>(null);
 
 	// Proposal form
 	const [actionMethod, setActionMethod] = useState<AuthorityMethod>("addMedic");
@@ -116,26 +114,17 @@ export default function GovernanceDashboard() {
 	const readStatuses = useCallback(async () => {
 		if (!authorityAddr) return;
 		const client = getPublicClient(ethRpcUrl);
-		const multisigH160 = ms?.h160 as `0x${string}` | undefined;
-		const addrs = [
-			...(multisigH160 ? [multisigH160] : []),
-			...devAccounts.map((a) => a.evmAddress),
-		];
+		const addrs = devAccounts.map((a) => a.evmAddress);
 
-		const [auths, medics, count] = await Promise.all([
-			Promise.all(
-				addrs.map((addr) =>
-					client
-						.readContract({
-							address: authorityAddr,
-							abi: medicAuthorityFullAbi,
-							functionName: "isAuthority",
-							args: [addr],
-						})
-						.then((r) => r as boolean)
-						.catch(() => null),
-				),
-			),
+		const [owner, medics] = await Promise.all([
+			client
+				.readContract({
+					address: authorityAddr,
+					abi: medicAuthorityFullAbi,
+					functionName: "owner",
+				})
+				.then((r) => (r as string).toLowerCase())
+				.catch(() => null),
 			Promise.all(
 				addrs.map((addr) =>
 					client
@@ -149,25 +138,14 @@ export default function GovernanceDashboard() {
 						.catch(() => null),
 				),
 			),
-			client
-				.readContract({
-					address: authorityAddr,
-					abi: medicAuthorityFullAbi,
-					functionName: "authorityCount",
-				})
-				.then((r) => Number(r as bigint))
-				.catch(() => null),
 		]);
 
-		const authMap: Record<string, boolean | null> = {};
 		const medicMap: Record<string, boolean | null> = {};
 		addrs.forEach((addr, i) => {
-			authMap[addr] = auths[i];
 			medicMap[addr] = medics[i];
 		});
-		setAuthStatuses(authMap);
+		setContractOwner(owner);
 		setMedicStatuses(medicMap);
-		setAuthorityCount(count);
 	}, [ethRpcUrl, authorityAddr]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const readPending = useCallback(async () => {
@@ -388,12 +366,13 @@ export default function GovernanceDashboard() {
 								{ms.threshold}-of-{ms.signatories.length}
 							</span>
 						</div>
-						{authorityCount !== null && (
+						{contractOwner !== null && (
 							<div className="flex items-center gap-2">
-								<span className="text-text-tertiary w-28 shrink-0">
-									Authority count
+								<span className="text-text-tertiary w-28 shrink-0">Owner</span>
+								<span className="text-text-secondary font-mono text-xs">
+									{contractOwner}
 								</span>
-								<span className="text-text-secondary">{authorityCount}</span>
+								<CopyButton value={contractOwner} />
 							</div>
 						)}
 					</div>
@@ -404,7 +383,7 @@ export default function GovernanceDashboard() {
 						<tr className="text-text-tertiary text-left">
 							<th className="pb-2 font-medium w-20">Account</th>
 							<th className="pb-2 font-medium w-36 text-xs">H160</th>
-							<th className="pb-2 font-medium text-center">Authority</th>
+							<th className="pb-2 font-medium text-center">Owner</th>
 							<th className="pb-2 font-medium text-center">Verified Medic</th>
 						</tr>
 					</thead>
@@ -416,7 +395,11 @@ export default function GovernanceDashboard() {
 									{ms.h160.slice(0, 10)}…{ms.h160.slice(-6)}
 								</td>
 								<td className="py-2 text-center">
-									{statusDot(authStatuses[ms.h160 as `0x${string}`])}
+									{statusDot(
+										contractOwner !== null
+											? contractOwner === ms.h160.toLowerCase()
+											: null,
+									)}
 								</td>
 								<td className="py-2 text-center">
 									{statusDot(medicStatuses[ms.h160 as `0x${string}`])}
@@ -432,7 +415,11 @@ export default function GovernanceDashboard() {
 										{addr.slice(0, 10)}…{addr.slice(-6)}
 									</td>
 									<td className="py-2 text-center">
-										{statusDot(authStatuses[addr])}
+										{statusDot(
+											contractOwner !== null
+												? contractOwner === addr.toLowerCase()
+												: null,
+										)}
 									</td>
 									<td className="py-2 text-center">
 										{statusDot(medicStatuses[addr])}
@@ -480,8 +467,7 @@ export default function GovernanceDashboard() {
 						>
 							<option value="addMedic">Add Medic</option>
 							<option value="removeMedic">Remove Medic</option>
-							<option value="addAuthority">Add Authority</option>
-							<option value="removeAuthority">Remove Authority</option>
+							<option value="transferOwnership">Transfer Ownership</option>
 						</select>
 					</div>
 				</div>
@@ -602,9 +588,8 @@ export default function GovernanceDashboard() {
 										>
 											<option value="addMedic">Add Medic</option>
 											<option value="removeMedic">Remove Medic</option>
-											<option value="addAuthority">Add Authority</option>
-											<option value="removeAuthority">
-												Remove Authority
+											<option value="transferOwnership">
+												Transfer Ownership
 											</option>
 										</select>
 										<input

@@ -14,7 +14,7 @@ type AnyApi = any;
 // Types
 // ---------------------------------------------------------------------------
 
-export type AuthorityMethod = "addMedic" | "removeMedic" | "addAuthority" | "removeAuthority";
+export type AuthorityMethod = "addMedic" | "removeMedic" | "transferOwnership";
 
 export interface Timepoint {
 	height: number;
@@ -66,23 +66,16 @@ export const medicAuthorityFullAbi = [
 	},
 	{
 		type: "function",
-		name: "addAuthority",
-		inputs: [{ name: "newAuth", type: "address" }],
+		name: "transferOwnership",
+		inputs: [{ name: "newOwner", type: "address" }],
 		outputs: [],
 		stateMutability: "nonpayable",
 	},
 	{
 		type: "function",
-		name: "removeAuthority",
-		inputs: [{ name: "auth", type: "address" }],
-		outputs: [],
-		stateMutability: "nonpayable",
-	},
-	{
-		type: "function",
-		name: "isAuthority",
-		inputs: [{ name: "", type: "address" }],
-		outputs: [{ name: "", type: "bool" }],
+		name: "owner",
+		inputs: [],
+		outputs: [{ name: "", type: "address" }],
 		stateMutability: "view",
 	},
 	{
@@ -90,13 +83,6 @@ export const medicAuthorityFullAbi = [
 		name: "isVerifiedMedic",
 		inputs: [{ name: "", type: "address" }],
 		outputs: [{ name: "", type: "bool" }],
-		stateMutability: "view",
-	},
-	{
-		type: "function",
-		name: "authorityCount",
-		inputs: [],
-		outputs: [{ name: "", type: "uint256" }],
 		stateMutability: "view",
 	},
 ] as const;

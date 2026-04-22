@@ -470,6 +470,38 @@ before removing the patch script when upgrading `polkadot-api`).
 
 ---
 
+### 14. Blake2F precompile (0x09) exists on pallet-revive but is the compression function, not a full blake2b-256
+
+**Layer**: pallet-revive precompiles
+**Hit on**: 2026-04-22
+
+**Symptom / question**: can a Solidity contract on PVM verify or derive `pallet-multisig`
+addresses on-chain? The assumption is that blake2 is unavailable in EVM/PVM, making it impossible.
+
+**Cause**: pallet-revive ships EIP-152 (`blake2F`) at precompile address `0x09`. It gives
+you the **blake2b round compression function F**, not a ready-made `blake2b_256(data)`.
+`pallet-multisig` derives its account ID as:
+
+```
+blake2_256( "modlpy/utilisuba" ++ SCALE::encode(sorted_AccountIds) ++ SCALE::encode(threshold) )
+```
+
+To reproduce this in Solidity you would also need:
+- A Solidity wrapper that implements blake2b initialisation, padding, and iterates F — these
+  exist (Zcash-era libs) but are non-trivial.
+- A SCALE encoder for `Vec<[u8;32]>` built from byte buffers in Solidity.
+
+**Fix / workaround**: avoid the computation entirely. Store the current multisig H160 as a
+single `owner` address in the contract. To rotate signatories, compute the new multisig H160
+off-chain, then have the current multisig call `transferOwnership(newH160)`. The contract
+needs no knowledge of blake2 or SCALE.
+
+**Upstream improvement**: a pallet-revive host function that exposes `blake2_256(bytes)` 
+directly (not the F round) would make on-chain multisig address derivation trivial and unlock
+other substrate-native hash use cases.
+
+---
+
 ## Open questions / things we noticed but didn't chase
 
 - **How to estimate pallet-multisig `max_weight` deterministically**: we tuned by hand. A

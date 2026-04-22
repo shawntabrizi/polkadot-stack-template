@@ -4,7 +4,6 @@ async function main() {
 	const client = createPublicClient({ transport: http("http://127.0.0.1:8645") });
 	const addr = "0xc01ee7f10ea4af4673cfff62710e1d7792aba8f3" as const;
 	const medic = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
-	const multisigH160 = "0x9549ff5910afff47319cba6acd90c683278f267f" as const;
 
 	const isMedic = await client.readContract({
 		address: addr,
@@ -20,38 +19,23 @@ async function main() {
 		functionName: "isVerifiedMedic",
 		args: [medic],
 	});
-	const authCount = await client.readContract({
+	const owner = await client.readContract({
 		address: addr,
 		abi: [
 			{
 				type: "function",
-				name: "authorityCount",
+				name: "owner",
 				inputs: [],
-				outputs: [{ name: "", type: "uint256" }],
+				outputs: [{ name: "", type: "address" }],
 				stateMutability: "view",
 			},
 		],
-		functionName: "authorityCount",
-	});
-	const isAuth = await client.readContract({
-		address: addr,
-		abi: [
-			{
-				type: "function",
-				name: "isAuthority",
-				inputs: [{ name: "", type: "address" }],
-				outputs: [{ name: "", type: "bool" }],
-				stateMutability: "view",
-			},
-		],
-		functionName: "isAuthority",
-		args: [multisigH160],
+		functionName: "owner",
 	});
 
 	console.log("=== MedicAuthority on-chain state ===");
-	console.log(`  Contract:       ${addr}`);
-	console.log(`  authorityCount: ${authCount}`);
-	console.log(`  isAuthority(${multisigH160}): ${isAuth}`);
+	console.log(`  Contract:              ${addr}`);
+	console.log(`  owner:                 ${owner}`);
 	console.log(`  isVerifiedMedic(${medic}): ${isMedic}`);
 }
 

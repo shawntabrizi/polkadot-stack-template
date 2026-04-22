@@ -81,21 +81,14 @@ export const medicAuthorityAbi = [
 	},
 	{
 		type: "function",
-		name: "addAuthority",
-		inputs: [{ name: "newAuth", type: "address" }],
-		outputs: [],
-		stateMutability: "nonpayable",
-	},
-	{
-		type: "function",
-		name: "removeAuthority",
-		inputs: [{ name: "auth", type: "address" }],
+		name: "transferOwnership",
+		inputs: [{ name: "newOwner", type: "address" }],
 		outputs: [],
 		stateMutability: "nonpayable",
 	},
 ] as const;
 
-export type AuthorityMethod = "addMedic" | "removeMedic" | "addAuthority" | "removeAuthority";
+export type AuthorityMethod = "addMedic" | "removeMedic" | "transferOwnership";
 
 export function encodeAuthorityCall(method: AuthorityMethod, target: `0x${string}`): `0x${string}` {
 	return encodeFunctionData({ abi: medicAuthorityAbi, functionName: method, args: [target] });

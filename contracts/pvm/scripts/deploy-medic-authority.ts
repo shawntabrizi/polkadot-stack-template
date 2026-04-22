@@ -35,9 +35,9 @@ async function main() {
 	const [walletClient] = await hre.viem.getWalletClients(chainOption);
 	const publicClient = await hre.viem.getPublicClient(chainOption);
 
-	console.log(`Deploying MedicAuthority with initial authority: ${multisigH160}`);
+	console.log(`Deploying MedicAuthority with owner: ${multisigH160}`);
 	const marketAddress = await deployContract(walletClient, publicClient, "MedicAuthority", [
-		[multisigH160],
+		multisigH160,
 	]);
 	console.log(`MedicAuthority deployed to: ${marketAddress}`);
 

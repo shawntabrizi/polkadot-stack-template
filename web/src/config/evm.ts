@@ -312,30 +312,43 @@ export const medicalMarketAbi = [
 	},
 ] as const;
 
-// Well-known Substrate dev account Ethereum private keys.
-// These are PUBLIC test keys from Substrate dev mnemonics — NEVER use for real funds.
+// Fallback private keys — well-known Substrate dev keys, safe for local nodes only.
+// For Paseo or any public network set VITE_ACCOUNT_n_PK in web/.env.local instead.
+const _DEV_PKS = [
+	"0x5fb92d6e98884f76de468fa3f6278f8807c48bebc13595d45af5bdc4da702133",
+	"0x8075991ce870b93a8870eca0c0f91913d12f47948ca0fd25b49c6fa7cdbeee8b",
+	"0x0b6e18cafb6ed99687ec547bd28139cafbd3a4f28014f8640076aba0082bf262",
+] as const;
+
+function resolveAccount(
+	envPk: string | undefined,
+	envName: string | undefined,
+	fallbackPk: string,
+	fallbackName: string,
+) {
+	const pk = (envPk || fallbackPk) as `0x${string}`;
+	return { name: envName || fallbackName, privateKey: pk, account: privateKeyToAccount(pk) };
+}
+
 export const evmDevAccounts = [
-	{
-		name: "Alice",
-		privateKey: "0x5fb92d6e98884f76de468fa3f6278f8807c48bebc13595d45af5bdc4da702133" as const,
-		account: privateKeyToAccount(
-			"0x5fb92d6e98884f76de468fa3f6278f8807c48bebc13595d45af5bdc4da702133",
-		),
-	},
-	{
-		name: "Bob",
-		privateKey: "0x8075991ce870b93a8870eca0c0f91913d12f47948ca0fd25b49c6fa7cdbeee8b" as const,
-		account: privateKeyToAccount(
-			"0x8075991ce870b93a8870eca0c0f91913d12f47948ca0fd25b49c6fa7cdbeee8b",
-		),
-	},
-	{
-		name: "Charlie",
-		privateKey: "0x0b6e18cafb6ed99687ec547bd28139cafbd3a4f28014f8640076aba0082bf262" as const,
-		account: privateKeyToAccount(
-			"0x0b6e18cafb6ed99687ec547bd28139cafbd3a4f28014f8640076aba0082bf262",
-		),
-	},
+	resolveAccount(
+		import.meta.env.VITE_ACCOUNT_0_PK,
+		import.meta.env.VITE_ACCOUNT_0_NAME,
+		_DEV_PKS[0],
+		"Alice",
+	),
+	resolveAccount(
+		import.meta.env.VITE_ACCOUNT_1_PK,
+		import.meta.env.VITE_ACCOUNT_1_NAME,
+		_DEV_PKS[1],
+		"Bob",
+	),
+	resolveAccount(
+		import.meta.env.VITE_ACCOUNT_2_PK,
+		import.meta.env.VITE_ACCOUNT_2_NAME,
+		_DEV_PKS[2],
+		"Charlie",
+	),
 ];
 
 let publicClient: ReturnType<typeof createPublicClient> | null = null;
