@@ -200,28 +200,26 @@ export default function AccountsPage() {
 		};
 	}, []);
 
-	// Poll for browser extension wallets. Production builds parse JS faster than dev,
-	// so a one-shot 200ms delay misses the extension injection window. Poll every 250ms
-	// for up to 3s; stop as soon as something is found.
-	useEffect(() => {
-		let attempts = 0;
-		const MAX = 12; // 12 × 250ms = 3s
-		const timer = setInterval(() => {
-			attempts++;
-			try {
-				const wallets = getInjectedExtensions().filter(
-					(name) => name !== SpektrExtensionName,
-				);
-				if (wallets.length > 0 || attempts >= MAX) {
-					setAvailableWallets(wallets);
-					clearInterval(timer);
-				}
-			} catch {
-				if (attempts >= MAX) clearInterval(timer);
-			}
-		}, 250);
-		return () => clearInterval(timer);
+	// Poll for browser extension wallets. Production builds on IPFS/DotNS domains can
+	// take many seconds before extensions inject into window.injectedWeb3, so we poll
+	// every 500ms until something is found (no upper limit).
+	const scanWallets = useCallback(() => {
+		try {
+			const wallets = getInjectedExtensions().filter((name) => name !== SpektrExtensionName);
+			setAvailableWallets(wallets);
+			return wallets.length > 0;
+		} catch {
+			return false;
+		}
 	}, []);
+
+	useEffect(() => {
+		if (scanWallets()) return;
+		const timer = setInterval(() => {
+			if (scanWallets()) clearInterval(timer);
+		}, 500);
+		return () => clearInterval(timer);
+	}, [scanWallets]);
 
 	async function connectWallet(name: string) {
 		try {
@@ -408,7 +406,12 @@ export default function AccountsPage() {
 
 			{/* Extension Wallets */}
 			<div className="card space-y-4">
-				<h2 className="section-title">Browser Extension Wallets</h2>
+				<div className="flex items-center justify-between">
+					<h2 className="section-title">Browser Extension Wallets</h2>
+					<button onClick={scanWallets} className="btn-secondary text-xs">
+						Rescan
+					</button>
+				</div>
 				{connectedWallet ? (
 					<div className="space-y-3">
 						<div className="flex items-center gap-3">
