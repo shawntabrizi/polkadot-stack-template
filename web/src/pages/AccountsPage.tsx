@@ -97,6 +97,7 @@ export default function AccountsPage() {
 	const spektrUnsubscribeRef = useRef<(() => void) | null>(null);
 	const extensionUnsubscribeRef = useRef<(() => void) | null>(null);
 	const [availableWallets, setAvailableWallets] = useState<string[]>([]);
+	const [connectError, setConnectError] = useState<string | null>(null);
 	const [extensionAccounts, setExtensionAccounts] = useState<InjectedPolkadotAccount[]>([]);
 	const [connectedWallet, setConnectedWallet] = useState<string | null>(null);
 	const [spektrAccounts, setSpektrAccounts] = useState<InjectedPolkadotAccount[]>([]);
@@ -230,6 +231,7 @@ export default function AccountsPage() {
 	}, [scanWallets]);
 
 	async function connectWallet(name: string) {
+		setConnectError(null);
 		try {
 			const ext = await connectInjectedExtension(name);
 			const accounts = ext.getAccounts();
@@ -241,7 +243,9 @@ export default function AccountsPage() {
 			});
 		} catch (e) {
 			console.error("Failed to connect wallet:", e);
-			setFundStatus(`Error connecting wallet: ${e instanceof Error ? e.message : e}`);
+			setConnectError(
+				`Could not connect to ${walletNames[name] || name}. Click the extension icon in your toolbar to wake it up, then try again.`,
+			);
 		}
 	}
 
@@ -457,51 +461,23 @@ export default function AccountsPage() {
 							))
 						)}
 					</div>
-				) : availableWallets.length > 0 ? (
-					<div className="flex flex-wrap gap-2">
-						{availableWallets.map((name) => (
-							<button
-								key={name}
-								onClick={() => connectWallet(name)}
-								className="btn-primary"
-							>
-								Connect {walletNames[name] || name}
-							</button>
-						))}
-					</div>
 				) : (
-					<div className="space-y-2">
-						<p className="text-sm text-text-muted">
-							No browser extension wallets detected. If you have{" "}
-							<a
-								href="https://polkadot.js.org/extension/"
-								target="_blank"
-								rel="noopener noreferrer"
-								className="text-polka-400 underline hover:text-polka-300"
-							>
-								Polkadot.js
-							</a>
-							,{" "}
-							<a
-								href="https://www.talisman.xyz/"
-								target="_blank"
-								rel="noopener noreferrer"
-								className="text-polka-400 underline hover:text-polka-300"
-							>
-								Talisman
-							</a>
-							, or{" "}
-							<a
-								href="https://www.subwallet.app/"
-								target="_blank"
-								rel="noopener noreferrer"
-								className="text-polka-400 underline hover:text-polka-300"
-							>
-								SubWallet
-							</a>{" "}
-							installed, click its icon in the toolbar to wake it up, then hit{" "}
-							<strong className="text-text-secondary">Rescan</strong>.
-						</p>
+					<div className="space-y-3">
+						<div className="flex flex-wrap gap-2">
+							{(availableWallets.length > 0
+								? availableWallets
+								: ["polkadot-js", "talisman", "subwallet-js"]
+							).map((name) => (
+								<button
+									key={name}
+									onClick={() => connectWallet(name)}
+									className="btn-primary"
+								>
+									Connect {walletNames[name] || name}
+								</button>
+							))}
+						</div>
+						{connectError && <p className="text-sm text-accent-red">{connectError}</p>}
 					</div>
 				)}
 			</div>
