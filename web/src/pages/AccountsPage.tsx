@@ -232,20 +232,31 @@ export default function AccountsPage() {
 
 	async function connectWallet(name: string) {
 		setConnectError(null);
-		try {
-			const ext = await connectInjectedExtension(name);
-			const accounts = ext.getAccounts();
-			setExtensionAccounts(accounts);
-			setConnectedWallet(name);
-			extensionUnsubscribeRef.current?.();
-			extensionUnsubscribeRef.current = ext.subscribe((updated) => {
-				setExtensionAccounts(updated);
-			});
-		} catch (e) {
-			console.error("Failed to connect wallet:", e);
-			setConnectError(
-				`Could not connect to ${walletNames[name] || name}. Click the extension icon in your toolbar to wake it up, then try again.`,
-			);
+		// Retry up to 5 times with 800ms gaps — MV3 extension background workers go to
+		// sleep and take a moment to restore window.injectedWeb3[name].enable after the
+		// user clicks the extension icon.
+		for (let attempt = 0; attempt < 5; attempt++) {
+			try {
+				const ext = await connectInjectedExtension(name);
+				const accounts = ext.getAccounts();
+				setExtensionAccounts(accounts);
+				setConnectedWallet(name);
+				extensionUnsubscribeRef.current?.();
+				extensionUnsubscribeRef.current = ext.subscribe((updated) => {
+					setExtensionAccounts(updated);
+				});
+				return;
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				if (!msg.includes("Unavailable") || attempt === 4) {
+					console.error("Failed to connect wallet:", e);
+					setConnectError(
+						`Could not connect to ${walletNames[name] || name}. Click the Polkadot.js icon in your browser toolbar to wake it, then try again.`,
+					);
+					return;
+				}
+				await new Promise((r) => setTimeout(r, 800));
+			}
 		}
 	}
 
