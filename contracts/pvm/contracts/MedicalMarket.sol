@@ -109,6 +109,25 @@ contract MedicalMarket {
 		uint256 ephPkY,
 		uint256 ciphertextHash
 	);
+	event RecordShared(
+		address indexed patient,
+		uint256 indexed doctorPkX, // indexed for server-side filtering; Y post-filtered in JS
+		uint256 doctorPkY,
+		uint256 headerCommit,
+		uint256 bodyCommit,
+		uint256 medicPkX,
+		uint256 medicPkY,
+		uint256 sigR8x,
+		uint256 sigR8y,
+		uint256 sigS,
+		uint256 ephPkX,
+		uint256 ephPkY,
+		uint256 ciphertextHash,
+		string title,
+		string recordType,
+		uint64 recordedAt,
+		string facility
+	);
 	event ListingCancelled(uint256 indexed listingId, address indexed patient);
 	event OrderCancelled(
 		uint256 indexed orderId,
@@ -297,6 +316,58 @@ contract MedicalMarket {
 		require(success, "Refund to researcher failed");
 
 		emit OrderCancelled(orderId, order.listingId, order.researcher, order.amount);
+	}
+
+	/// @notice Share a medic-signed record with a specific BabyJubJub pubkey
+	///         encrypted via ECDH + Poseidon stream cipher. No storage, no escrow —
+	///         pure event emission. Recipient's inbox reads RecordShared logs
+	///         filtered by their own doctorPkX (indexed).
+	function shareRecord(
+		HeaderInput calldata header,
+		uint256 headerCommit,
+		uint256 bodyCommit,
+		uint256 medicPkX,
+		uint256 medicPkY,
+		uint256 sigR8x,
+		uint256 sigR8y,
+		uint256 sigS,
+		uint256 doctorPkX,
+		uint256 doctorPkY,
+		uint256 ephPkX,
+		uint256 ephPkY,
+		uint256 ciphertextHash
+	) external {
+		require(bytes(header.title).length > 0, "Title cannot be empty");
+		require(bytes(header.recordType).length > 0, "recordType cannot be empty");
+		require(bytes(header.facility).length > 0, "facility cannot be empty");
+		require(header.recordedAt > 0, "recordedAt must be non-zero");
+		require(headerCommit != 0, "headerCommit must be non-zero");
+		require(bodyCommit != 0, "bodyCommit must be non-zero");
+		require(medicPkX != 0 || medicPkY != 0, "medicPk must be non-zero");
+		require(sigS != 0, "signature must be non-zero");
+		require(doctorPkX != 0 || doctorPkY != 0, "doctorPk must be non-zero");
+		require(ephPkX != 0 || ephPkY != 0, "ephPk must be non-zero");
+		require(ciphertextHash != 0, "ciphertextHash must be non-zero");
+
+		emit RecordShared(
+			msg.sender,
+			doctorPkX,
+			doctorPkY,
+			headerCommit,
+			bodyCommit,
+			medicPkX,
+			medicPkY,
+			sigR8x,
+			sigR8y,
+			sigS,
+			ephPkX,
+			ephPkY,
+			ciphertextHash,
+			header.title,
+			header.recordType,
+			header.recordedAt,
+			header.facility
+		);
 	}
 
 	/// @notice Listing metadata: commits, medic attestation, price, patient, active.

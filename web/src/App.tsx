@@ -37,6 +37,8 @@ export default function App() {
 		{ path: "/researcher", label: "Researcher", enabled: true },
 		{ path: "/patient", label: "Patient", enabled: true },
 		{ path: "/medic", label: "Medic", enabled: true },
+		{ path: "/share", label: "Share", enabled: true },
+		{ path: "/inbox", label: "Inbox", enabled: true },
 		{ path: "/governance", label: "Governance", enabled: true },
 		...(isDev ? [{ path: "/accounts", label: "Accounts", enabled: true }] : []),
 	];

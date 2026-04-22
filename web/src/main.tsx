@@ -9,6 +9,8 @@ const AccountsPage = lazy(() => import("./pages/AccountsPage"));
 const PatientDashboard = lazy(() => import("./pages/PatientDashboard"));
 const MedicSign = lazy(() => import("./pages/MedicSign"));
 const ResearcherBuy = lazy(() => import("./pages/ResearcherBuy"));
+const ShareWithDoctor = lazy(() => import("./pages/ShareWithDoctor"));
+const DoctorInbox = lazy(() => import("./pages/DoctorInbox"));
 const GovernanceDashboard = lazy(() => import("./pages/GovernanceDashboard"));
 
 const routeFallback = (
@@ -60,6 +62,22 @@ createRoot(document.getElementById("root")!).render(
 						element={
 							<Suspense fallback={routeFallback}>
 								<ResearcherBuy />
+							</Suspense>
+						}
+					/>
+					<Route
+						path="share"
+						element={
+							<Suspense fallback={routeFallback}>
+								<ShareWithDoctor />
+							</Suspense>
+						}
+					/>
+					<Route
+						path="inbox"
+						element={
+							<Suspense fallback={routeFallback}>
+								<DoctorInbox />
 							</Suspense>
 						}
 					/>

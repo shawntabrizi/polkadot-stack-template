@@ -677,4 +677,227 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 			expect((e as Error).message).to.include("pending order");
 		}
 	});
+
+	describe("shareRecord", function () {
+		const skDoctor = deterministicScalar(4);
+		const pkDoctorPoint = mulPointEscalar(Base8, skDoctor);
+		const doctorPkX = pkDoctorPoint[0];
+		const doctorPkY = pkDoctorPoint[1];
+
+		async function deployAndShare() {
+			const ctx = await deployFixture();
+			const { market, patient } = ctx;
+			const shareNonce = 0n;
+			const { ephPk, ciphertext, ciphertextHash } = encryptForBuyer(
+				plaintext,
+				[doctorPkX, doctorPkY],
+				shareNonce,
+				ephSk,
+			);
+			await market.write.shareRecord(
+				[
+					headerTuple(header),
+					headerCommit,
+					bodyCommit,
+					medicPkX,
+					medicPkY,
+					sigR8x,
+					sigR8y,
+					sigS,
+					doctorPkX,
+					doctorPkY,
+					ephPk[0],
+					ephPk[1],
+					ciphertextHash,
+				],
+				{ account: patient.account },
+			);
+			return { ...ctx, ephPk, ciphertext, ciphertextHash, shareNonce };
+		}
+
+		it("emits RecordShared with the expected fields and lets the doctor decrypt", async function () {
+			const publicClient = await hre.viem.getPublicClient();
+			const { market, patient, ephPk, ciphertext, ciphertextHash, shareNonce } =
+				await deployAndShare();
+
+			const logs = await publicClient.getContractEvents({
+				address: market.address,
+				abi: market.abi,
+				eventName: "RecordShared",
+				fromBlock: 0n,
+				toBlock: "latest",
+			});
+			expect(logs.length).to.equal(1);
+			const args = logs[0].args as {
+				patient: `0x${string}`;
+				doctorPkX: bigint;
+				doctorPkY: bigint;
+				headerCommit: bigint;
+				bodyCommit: bigint;
+				medicPkX: bigint;
+				medicPkY: bigint;
+				ephPkX: bigint;
+				ephPkY: bigint;
+				ciphertextHash: bigint;
+				title: string;
+				recordType: string;
+				recordedAt: bigint;
+				facility: string;
+			};
+			expect(args.patient.toLowerCase()).to.equal(patient.account.address.toLowerCase());
+			expect(args.doctorPkX).to.equal(doctorPkX);
+			expect(args.doctorPkY).to.equal(doctorPkY);
+			expect(args.headerCommit).to.equal(headerCommit);
+			expect(args.bodyCommit).to.equal(bodyCommit);
+			expect(args.medicPkX).to.equal(medicPkX);
+			expect(args.ephPkX).to.equal(ephPk[0]);
+			expect(args.ephPkY).to.equal(ephPk[1]);
+			expect(args.ciphertextHash).to.equal(ciphertextHash);
+			expect(args.title).to.equal(header.title);
+			expect(args.recordType).to.equal(header.recordType);
+			expect(args.recordedAt).to.equal(header.recordedAt);
+			expect(args.facility).to.equal(header.facility);
+
+			// Doctor can decrypt using ephPk from the event + their own skDoctor
+			const recovered = decryptForBuyer(
+				[ephPk[0], ephPk[1]],
+				ciphertext,
+				skDoctor,
+				shareNonce,
+			);
+			expect(recovered).to.deep.equal(exampleRecord);
+		});
+
+		it("reverts on empty or zero inputs", async function () {
+			const { market, patient } = await deployFixture();
+			const shareNonce = 0n;
+			const { ephPk, ciphertextHash } = encryptForBuyer(
+				plaintext,
+				[doctorPkX, doctorPkY],
+				shareNonce,
+				ephSk,
+			);
+
+			type ShareArgs = Parameters<typeof market.write.shareRecord>[0];
+			const baseArgs: ShareArgs = [
+				headerTuple(header),
+				headerCommit,
+				bodyCommit,
+				medicPkX,
+				medicPkY,
+				sigR8x,
+				sigR8y,
+				sigS,
+				doctorPkX,
+				doctorPkY,
+				ephPk[0],
+				ephPk[1],
+				ciphertextHash,
+			];
+
+			const cases: { label: string; mutate: (a: ShareArgs) => ShareArgs; msg: string }[] = [
+				{
+					label: "empty title",
+					mutate: (a) =>
+						[headerTuple({ ...header, title: "" }), ...a.slice(1)] as ShareArgs,
+					msg: "Title cannot be empty",
+				},
+				{
+					label: "empty recordType",
+					mutate: (a) =>
+						[headerTuple({ ...header, recordType: "" }), ...a.slice(1)] as ShareArgs,
+					msg: "recordType cannot be empty",
+				},
+				{
+					label: "empty facility",
+					mutate: (a) =>
+						[headerTuple({ ...header, facility: "" }), ...a.slice(1)] as ShareArgs,
+					msg: "facility cannot be empty",
+				},
+				{
+					label: "zero recordedAt",
+					mutate: (a) =>
+						[headerTuple({ ...header, recordedAt: 0n }), ...a.slice(1)] as ShareArgs,
+					msg: "recordedAt must be non-zero",
+				},
+				{
+					label: "zero headerCommit",
+					mutate: (a) => {
+						const n = [...a] as ShareArgs;
+						n[1] = 0n;
+						return n;
+					},
+					msg: "headerCommit must be non-zero",
+				},
+				{
+					label: "zero bodyCommit",
+					mutate: (a) => {
+						const n = [...a] as ShareArgs;
+						n[2] = 0n;
+						return n;
+					},
+					msg: "bodyCommit must be non-zero",
+				},
+				{
+					label: "zero medicPk",
+					mutate: (a) => {
+						const n = [...a] as ShareArgs;
+						n[3] = 0n;
+						n[4] = 0n;
+						return n;
+					},
+					msg: "medicPk must be non-zero",
+				},
+				{
+					label: "zero sigS",
+					mutate: (a) => {
+						const n = [...a] as ShareArgs;
+						n[7] = 0n;
+						return n;
+					},
+					msg: "signature must be non-zero",
+				},
+				{
+					label: "zero doctorPk",
+					mutate: (a) => {
+						const n = [...a] as ShareArgs;
+						n[8] = 0n;
+						n[9] = 0n;
+						return n;
+					},
+					msg: "doctorPk must be non-zero",
+				},
+				{
+					label: "zero ephPk",
+					mutate: (a) => {
+						const n = [...a] as ShareArgs;
+						n[10] = 0n;
+						n[11] = 0n;
+						return n;
+					},
+					msg: "ephPk must be non-zero",
+				},
+				{
+					label: "zero ciphertextHash",
+					mutate: (a) => {
+						const n = [...a] as ShareArgs;
+						n[12] = 0n;
+						return n;
+					},
+					msg: "ciphertextHash must be non-zero",
+				},
+			];
+
+			for (const c of cases) {
+				try {
+					await market.write.shareRecord(c.mutate(baseArgs), {
+						account: patient.account,
+					});
+					expect.fail(`Should have reverted: ${c.label}`);
+				} catch (e: unknown) {
+					expect((e as Error).message, c.label).to.include(c.msg);
+				}
+			}
+		});
+	});
 });

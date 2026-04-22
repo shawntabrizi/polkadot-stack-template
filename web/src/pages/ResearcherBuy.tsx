@@ -1,7 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { type Address, formatEther, parseEther, encodeFunctionData } from "viem";
-import { Binary, FixedSizeBinary, type TxBestBlocksState } from "polkadot-api";
-import { filter, firstValueFrom } from "rxjs";
+import { type Address, formatEther, parseEther } from "viem";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import VerifiedBadge from "../components/VerifiedBadge";
 import Spinner from "../components/Spinner";
@@ -9,10 +7,8 @@ import Toast from "../components/Toast";
 import { deployments } from "../config/deployments";
 import { subscribeStatements } from "../hooks/useStatementStore";
 import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
-import { getClient } from "../hooks/useChain";
-import { getStackTemplateDescriptor } from "../hooks/useConnection";
+import { useReviveCall } from "../hooks/useReviveCall";
 import { useChainStore } from "../store/chainStore";
-import { formatDispatchError } from "../utils/format";
 import {
 	getOrCreateBuyerKey,
 	computeBodyCommit,
@@ -24,10 +20,6 @@ import {
 } from "../utils/zk";
 import { verifySignature } from "@zk-kit/eddsa-poseidon";
 import { blake2b } from "blakejs";
-
-const MAX_STORAGE_DEPOSIT = 100_000_000_000_000n;
-const CALL_WEIGHT = { ref_time: 5_000_000_000n, proof_size: 524_288n };
-const WEI_TO_PLANCK = 1_000_000n;
 
 interface Listing {
 	id: bigint;
@@ -71,15 +63,6 @@ interface DecryptedRecord {
 	fields: Record<string, string>;
 	bodyMatch: boolean;
 	sigValid: boolean;
-}
-
-function hexToBytes(hex: string): Uint8Array {
-	const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
-	const out = new Uint8Array(clean.length / 2);
-	for (let i = 0; i < out.length; i++) {
-		out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-	}
-	return out;
 }
 
 function uint256ToHashHex(n: bigint): string {
@@ -166,52 +149,12 @@ export default function ResearcherBuy() {
 
 	const currentAccount = accounts[selectedAccountIndex] ?? accounts[0];
 
-	async function reviveCall(
-		functionName: string,
-		args: readonly unknown[],
-		valueWei: bigint = 0n,
-	): Promise<{ txHash: string }> {
-		const calldata = encodeFunctionData({
-			abi: medicalMarketAbi,
-			functionName,
-			args,
-		} as Parameters<typeof encodeFunctionData>[0]);
-
-		const client = getClient(wsUrl);
-		const descriptor = await getStackTemplateDescriptor();
-		const api = client.getTypedApi(descriptor);
-
-		const h160 = new FixedSizeBinary(
-			hexToBytes(currentAccount.evmAddress),
-		) as FixedSizeBinary<20>;
-		const existingMapping = await api.query.Revive.OriginalAccount.getValue(h160);
-		if (!existingMapping) {
-			setTxStatus("Registering account with pallet-revive (one-time)...");
-			await firstValueFrom(
-				api.tx.Revive.map_account()
-					.signSubmitAndWatch(currentAccount.signer)
-					.pipe(
-						filter(
-							(e): e is TxBestBlocksState & { found: true } =>
-								e.type === "txBestBlocksState" && "found" in e && e.found === true,
-						),
-					),
-			);
-		}
-
-		const result = await api.tx.Revive.call({
-			dest: new FixedSizeBinary(hexToBytes(contractAddress)) as FixedSizeBinary<20>,
-			value: valueWei / WEI_TO_PLANCK,
-			weight_limit: CALL_WEIGHT,
-			storage_deposit_limit: MAX_STORAGE_DEPOSIT,
-			data: Binary.fromHex(calldata),
-		}).signAndSubmit(currentAccount.signer);
-
-		if (!result.ok) {
-			throw new Error(formatDispatchError(result.dispatchError));
-		}
-		return { txHash: result.txHash };
-	}
+	const reviveCall = useReviveCall({
+		account: currentAccount,
+		contractAddress,
+		wsUrl,
+		onStatus: setTxStatus,
+	});
 
 	const loadAll = useCallback(async () => {
 		if (!contractAddress) {
