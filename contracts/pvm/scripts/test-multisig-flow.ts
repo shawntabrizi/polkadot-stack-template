@@ -248,9 +248,7 @@ async function main() {
 
 	const deployments = readDeployments();
 	if (!deployments.multisig) {
-		console.error(
-			"deployments.json missing 'multisig' — run `npm run compute-multisig` first.",
-		);
+		console.error("deployments.json missing 'multisig' — run `npm run set-deployments` first.");
 		process.exit(1);
 	}
 	if (!deployments.medicAuthority) {

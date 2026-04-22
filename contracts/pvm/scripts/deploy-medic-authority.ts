@@ -25,7 +25,7 @@ async function deployContract(
 async function main() {
 	const deployments = readDeployments();
 	if (!deployments.multisig) {
-		throw new Error("Run compute-multisig.ts first to populate deployments.json.multisig");
+		throw new Error("Run set-deployments.ts first to populate deployments.json.multisig");
 	}
 	const { h160: multisigH160 } = deployments.multisig;
 

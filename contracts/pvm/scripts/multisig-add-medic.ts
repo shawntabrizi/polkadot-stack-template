@@ -6,7 +6,7 @@
  *
  * Requirements:
  *   - Local node running at ws://127.0.0.1:9944 with pallet-multisig enabled.
- *   - deployments.json populated by compute-multisig.ts + deploy-medic-authority.ts.
+ *   - deployments.json populated by set-deployments.ts + deploy-medic-authority.ts.
  *   - Multisig SS58 account funded (needs native token for inner-call + deposit fees).
  *
  * Two-step flow (2-of-3 threshold):
@@ -172,7 +172,7 @@ async function main() {
 	const deployments = readDeployments();
 	if (!deployments.multisig) {
 		console.error(
-			"Error: deployments.json is missing 'multisig'.\n  Run: npx ts-node scripts/compute-multisig.ts",
+			"Error: deployments.json is missing 'multisig'.\n  Run: npx ts-node --transpile-only scripts/set-deployments.ts",
 		);
 		process.exit(1);
 	}
@@ -212,7 +212,7 @@ async function main() {
 			signatories,
 		);
 		console.error(
-			"Hint: check that --signer-index matches the accounts used in compute-multisig.ts.",
+			"Hint: check that --signer-index matches the accounts used in set-deployments.ts.",
 		);
 		process.exit(1);
 	}

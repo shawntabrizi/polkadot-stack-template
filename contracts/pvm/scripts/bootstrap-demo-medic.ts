@@ -183,7 +183,7 @@ async function main() {
 	await cryptoWaitReady();
 	const deployments = readDeployments();
 	if (!deployments.multisig)
-		throw new Error("deployments.json missing 'multisig' — run compute-multisig first");
+		throw new Error("deployments.json missing 'multisig' — run set-deployments first");
 	if (!deployments.medicAuthority)
 		throw new Error(
 			"deployments.json missing 'medicAuthority' — run deploy-medic-authority first",

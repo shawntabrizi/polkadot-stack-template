@@ -71,9 +71,9 @@ cd "$ROOT_DIR/contracts/pvm"
 npm run deploy-market:local
 
 echo "[7/9] Deploying MedicAuthority governance registry..."
-echo "  Computing deterministic multisig AccountId + H160 (Alice/Bob/Charlie, 2-of-3)..."
+echo "  Computing deterministic multisig AccountId + H160 from council wallet env vars..."
 cd "$ROOT_DIR/contracts/pvm"
-npm run compute-multisig
+npm run set-deployments
 
 echo "  Deploying MedicAuthority with multisig H160 as sole initial authority..."
 npm run deploy-medic-authority:local

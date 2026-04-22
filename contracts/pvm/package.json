@@ -15,7 +15,7 @@
     "deploy:testnet": "npx hardhat run scripts/deploy.ts --network polkadotTestnet",
     "deploy-market:local": "npx hardhat run scripts/deploy-market.ts --network local",
     "deploy-market:testnet": "npx hardhat run scripts/deploy-market.ts --network polkadotTestnet",
-    "compute-multisig": "npx ts-node scripts/compute-multisig.ts",
+    "set-deployments": "npx ts-node --transpile-only scripts/set-deployments.ts",
     "deploy-medic-authority:local": "npx hardhat run scripts/deploy-medic-authority.ts --network local",
     "deploy-medic-authority:testnet": "npx hardhat run scripts/deploy-medic-authority.ts --network polkadotTestnet",
     "bootstrap-demo-medic:local": "npx ts-node --transpile-only scripts/bootstrap-demo-medic.ts",

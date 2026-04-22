@@ -19,7 +19,7 @@ const AMOUNT_PLANCK = 10_000_000_000_000n; // 10 UNIT (assuming 12 decimals)
 async function main() {
 	await cryptoWaitReady();
 	const deployments = readDeployments();
-	if (!deployments.multisig) throw new Error("run compute-multisig.ts first");
+	if (!deployments.multisig) throw new Error("run set-deployments.ts first");
 
 	const multisigSs58 = deployments.multisig.ss58;
 	const keyring = new Keyring({ type: "sr25519", ss58Format: 42 });

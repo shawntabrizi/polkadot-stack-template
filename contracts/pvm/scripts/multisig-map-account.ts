@@ -43,7 +43,7 @@ async function main() {
 
 	await cryptoWaitReady();
 	const deployments = readDeployments();
-	if (!deployments.multisig) throw new Error("run compute-multisig first");
+	if (!deployments.multisig) throw new Error("run set-deployments.ts first");
 	const { threshold, signatories } = deployments.multisig;
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -95,7 +95,7 @@ export function encodeAuthorityCall(method: AuthorityMethod, target: `0x${string
 }
 
 // ---------------------------------------------------------------------------
-// Multisig account derivation — mirrors compute-multisig.ts.
+// Multisig account derivation — mirrors set-deployments.ts.
 // ---------------------------------------------------------------------------
 
 /**
