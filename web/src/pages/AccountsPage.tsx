@@ -200,14 +200,22 @@ export default function AccountsPage() {
 		};
 	}, []);
 
-	// Detect available browser extension wallets on mount
+	// Detect available browser extension wallets on mount.
+	// Delay so extensions have time to inject into window.injectedWeb3 before we read it —
+	// production builds mount faster than dev and hit a race condition without this.
 	useEffect(() => {
-		try {
-			const wallets = getInjectedExtensions().filter((name) => name !== SpektrExtensionName);
-			setAvailableWallets(wallets);
-		} catch {
-			// No injected extensions available
-		}
+		const detect = () => {
+			try {
+				const wallets = getInjectedExtensions().filter(
+					(name) => name !== SpektrExtensionName,
+				);
+				setAvailableWallets(wallets);
+			} catch {
+				// No injected extensions available
+			}
+		};
+		const timer = setTimeout(detect, 200);
+		return () => clearTimeout(timer);
 	}, []);
 
 	async function connectWallet(name: string) {
