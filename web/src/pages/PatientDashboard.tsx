@@ -333,8 +333,10 @@ export default function PatientDashboard() {
 		try {
 			if (!(await verifyContract())) return;
 
-			if (statementStoreAvailable === false) {
-				setTxStatus("Error: Statement Store unavailable — start the local node first.");
+			if (statementStoreAvailable !== true) {
+				setTxStatus(
+					"Error: Statement Store unavailable. Switch the network to a local node (ws://localhost:9944) or use Nova Wallet.",
+				);
 				return;
 			}
 
@@ -418,10 +420,15 @@ export default function PatientDashboard() {
 				</p>
 			</div>
 
+			{statementStoreAvailable === null && (
+				<div className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-text-muted">
+					Checking Statement Store availability…
+				</div>
+			)}
 			{statementStoreAvailable === false && (
 				<div className="rounded-lg border border-accent-red/30 bg-accent-red/[0.06] px-4 py-3 text-sm text-accent-red">
-					Statement Store unavailable — start the local node. Fulfillment is disabled
-					until the node is reachable.
+					Statement Store unavailable on this network. Fulfillment requires a local node
+					(switch to ws://localhost:9944 in network settings) or Nova Wallet.
 				</div>
 			)}
 
@@ -692,7 +699,7 @@ export default function PatientDashboard() {
 											onClick={() =>
 												fulfillOrder(orderIdForFulfill, listing.id)
 											}
-											disabled={loading || statementStoreAvailable === false}
+											disabled={loading || statementStoreAvailable !== true}
 											className="btn-accent text-xs px-3 py-1 disabled:opacity-40 disabled:cursor-not-allowed"
 											style={{
 												background:

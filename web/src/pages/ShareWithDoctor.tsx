@@ -372,8 +372,10 @@ export default function ShareWithDoctor() {
 			setTxStatus("Error: Select or paste a recipient pubkey");
 			return;
 		}
-		if (statementStoreAvailable === false) {
-			setTxStatus("Error: Statement Store unavailable — start the local node first.");
+		if (statementStoreAvailable !== true) {
+			setTxStatus(
+				"Error: Statement Store unavailable. Switch the network to a local node (ws://localhost:9944) or use Nova Wallet.",
+			);
 			return;
 		}
 
@@ -455,7 +457,7 @@ export default function ShareWithDoctor() {
 		!!contractAddress &&
 		!!importedPackage &&
 		!!selectedRecipient &&
-		statementStoreAvailable !== false &&
+		statementStoreAvailable === true &&
 		!!currentAccount &&
 		!sharing;
 
@@ -470,10 +472,15 @@ export default function ShareWithDoctor() {
 				</p>
 			</div>
 
+			{statementStoreAvailable === null && (
+				<div className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-text-muted">
+					Checking Statement Store availability…
+				</div>
+			)}
 			{statementStoreAvailable === false && (
 				<div className="rounded-lg border border-accent-red/30 bg-accent-red/[0.06] px-4 py-3 text-sm text-accent-red">
-					Statement Store unavailable — start the local node. Sharing is disabled until
-					the node is reachable.
+					Statement Store unavailable on this network. Sharing requires a local node
+					(switch to ws://localhost:9944 in network settings) or Nova Wallet.
 				</div>
 			)}
 
@@ -543,7 +550,7 @@ export default function ShareWithDoctor() {
 							showStatementStoreToggle={false}
 							uploadToStatementStore={false}
 							onStatementStoreToggle={() => {}}
-							statementStoreDisabled={statementStoreAvailable === false}
+							statementStoreDisabled={statementStoreAvailable !== true}
 						/>
 						{packageParseError && (
 							<p className="text-accent-red text-xs">{packageParseError}</p>
