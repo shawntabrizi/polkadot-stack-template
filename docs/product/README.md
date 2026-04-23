@@ -20,6 +20,8 @@ Read in this order:
 | [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) | Phased build plan — no-ZK skeleton first, ZK added incrementally |
 | [SKILLS.md](./SKILLS.md) | Skills database by phase — what to learn, difficulty, known risks |
 | [EXTERNAL_DEPS.md](./EXTERNAL_DEPS.md) | Running log of external dependency failures and workarounds |
+| [PITCH_5MIN.md](./PITCH_5MIN.md) | 5-minute hackathon pitch — slide structure, Gamma prompt, demo script |
+| [ZK_ON_PVM_OPEN_QUESTION.md](./ZK_ON_PVM_OPEN_QUESTION.md) | Open engineering question: on-chain ZK verification via pallet-revive host functions |
 
 ## Current Stage
 

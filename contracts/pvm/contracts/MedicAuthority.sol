@@ -11,6 +11,17 @@ contract MedicAuthority {
 	address public owner;
 	mapping(address => bool) public isVerifiedMedic;
 
+	// pallet-multisig stores only the 32-byte callHash on-chain; signatories must
+	// re-supply the call bytes on execution. We persist (action, target) here so
+	// approvers can reconstruct the inner call via a deterministic contract read
+	// instead of depending on log indexers. proposedAt == 0 means "not hinted".
+	struct Proposal {
+		string action;
+		address target;
+		uint64 proposedAt;
+	}
+	mapping(bytes32 => Proposal) public proposals;
+
 	event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 	event MedicAdded(address indexed medic, address indexed by);
 	event MedicRemoved(address indexed medic, address indexed by);
@@ -50,9 +61,25 @@ contract MedicAuthority {
 	}
 
 	/// @notice Anyone can hint what a multisig proposal is for. No auth — the callHash
-	///         ties this to the actual on-chain MultisigInfo entry; approvers recompute
-	///         the hash client-side to verify before signing.
+	///         ties this to the actual on-chain MultisigInfo entry. If a hint already
+	///         exists for this hash it is silently kept (first-write-wins) so a
+	///         malicious late-caller can't rewrite a pending proposal's metadata.
 	function hintProposal(bytes32 callHash, string calldata action, address target) external {
-		emit ProposalHinted(callHash, action, target);
+		if (proposals[callHash].proposedAt == 0) {
+			proposals[callHash] = Proposal({
+				action: action,
+				target: target,
+				proposedAt: uint64(block.timestamp)
+			});
+			emit ProposalHinted(callHash, action, target);
+		}
+	}
+
+	/// @notice Convenience read used by the governance dashboard to bypass log indexers.
+	function getProposal(
+		bytes32 callHash
+	) external view returns (string memory action, address target, uint64 proposedAt) {
+		Proposal memory p = proposals[callHash];
+		return (p.action, p.target, p.proposedAt);
 	}
 }

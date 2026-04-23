@@ -1,0 +1,389 @@
+diff --git a/web/src/hooks/useAccount.ts b/web/src/hooks/useAccount.ts
+index 75bcec0..5a565d2 100644
+--- a/web/src/hooks/useAccount.ts
++++ b/web/src/hooks/useAccount.ts
+@@ -39,6 +39,30 @@ export type LocalSigner = {
+ 	signBytes: (data: Uint8Array) => Promise<Uint8Array>;
+ };
+ 
++// Extension wallets (Polkadot.js / Talisman / SubWallet) wrap raw bytes with
++// <Bytes>…</Bytes> before signing, which produces a signature the Statement
++// Store runtime can't verify. A per-account burner sr25519 keypair signs the
++// Statement Store proof; the extension still signs all on-chain extrinsics.
++export function getOrCreateStatementSigner(address: string): LocalSigner {
++	const storageKey = `stmt-burner-mini-secret:${address}`;
++	let hex = localStorage.getItem(storageKey);
++	if (!hex) {
++		const bytes = new Uint8Array(32);
++		crypto.getRandomValues(bytes);
++		hex = Array.from(bytes)
++			.map((b) => b.toString(16).padStart(2, "0"))
++			.join("");
++		localStorage.setItem(storageKey, hex);
++	}
++	const miniSecret = new Uint8Array(32);
++	for (let i = 0; i < 32; i++) miniSecret[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
++	const keypair = sr25519CreateDerive(miniSecret)("");
++	return {
++		publicKey: keypair.publicKey,
++		signBytes: (data: Uint8Array) => Promise.resolve(keypair.sign(data)),
++	};
++}
++
+ export type AppAccount = {
+ 	name: string;
+ 	/** SS58-encoded Substrate address */
+diff --git a/web/src/hooks/useStatementStore.ts b/web/src/hooks/useStatementStore.ts
+index 6dd28a9..de1ea4f 100644
+--- a/web/src/hooks/useStatementStore.ts
++++ b/web/src/hooks/useStatementStore.ts
+@@ -3,10 +3,8 @@ import {
+ 	type Statement,
+ 	type SignedStatement,
+ } from "@novasamatech/product-sdk";
+-import { createLazyClient } from "@novasamatech/statement-store";
+-import { createStatementSdk } from "@novasamatech/sdk-statement";
+-import { getWsProvider } from "polkadot-api/ws-provider/web";
+-import { Bytes, compact, u8 } from "@polkadot-api/substrate-bindings";
++import { statementCodec } from "@novasamatech/sdk-statement";
++import { compact } from "@polkadot-api/substrate-bindings";
+ import { blake2b } from "blakejs";
+ import { STATEMENT_STORE_TESTNET_WS_URL } from "@/config/network";
+ 
+@@ -38,28 +36,10 @@ let _store: ReturnType<typeof createStatementStore> | null = null;
+ const getStore = () => (_store ??= createStatementStore());
+ 
+ // ---------------------------------------------------------------------------
+-// Raw-RPC SCALE helpers (local-dev path — kept verbatim)
++// Raw-RPC statement submission helpers
+ // ---------------------------------------------------------------------------
+ 
+ const MAX_STATEMENT_STORE_ENCODED_SIZE = 1024 * 1024 - 1;
+-const FIELD_TAG_AUTH = 0;
+-const FIELD_TAG_PLAIN_DATA = 8;
+-const PROOF_VARIANT_SR25519 = 0;
+-
+-const encodeVecU8 = Bytes.enc();
+-
+-function concatBytes(parts: Uint8Array[]): Uint8Array {
+-	const totalLen = parts.reduce((sum, part) => sum + part.length, 0);
+-	const result = new Uint8Array(totalLen);
+-	let offset = 0;
+-
+-	for (const part of parts) {
+-		result.set(part, offset);
+-		offset += part.length;
+-	}
+-
+-	return result;
+-}
+ 
+ function ensureFixedLength(value: Uint8Array, length: number, label: string): void {
+ 	if (value.length !== length) {
+@@ -67,38 +47,6 @@ function ensureFixedLength(value: Uint8Array, length: number, label: string): vo
+ 	}
+ }
+ 
+-function encodeSr25519Proof(publicKey: Uint8Array, signature: Uint8Array): Uint8Array {
+-	ensureFixedLength(publicKey, 32, "Statement Store public key");
+-	ensureFixedLength(signature, 64, "Statement Store signature");
+-
+-	return concatBytes([u8.enc(PROOF_VARIANT_SR25519), signature, publicKey]);
+-}
+-
+-function encodeDataField(data: Uint8Array): Uint8Array {
+-	return concatBytes([u8.enc(FIELD_TAG_PLAIN_DATA), encodeVecU8(data)]);
+-}
+-
+-function encodeProofField(publicKey: Uint8Array, signature: Uint8Array): Uint8Array {
+-	return concatBytes([u8.enc(FIELD_TAG_AUTH), encodeSr25519Proof(publicKey, signature)]);
+-}
+-
+-function buildStatementSignaturePayload(data: Uint8Array): Uint8Array {
+-	// Matches sp_statement_store::Statement::encoded(true) for a data-only statement.
+-	return encodeDataField(data);
+-}
+-
+-function buildSignedStatement(
+-	data: Uint8Array,
+-	publicKey: Uint8Array,
+-	signature: Uint8Array,
+-): Uint8Array {
+-	return concatBytes([
+-		compact.enc(2),
+-		encodeProofField(publicKey, signature),
+-		encodeDataField(data),
+-	]);
+-}
+-
+ function bytesToHex(bytes: Uint8Array): string {
+ 	return Array.from(bytes)
+ 		.map((b) => b.toString(16).padStart(2, "0"))
+@@ -155,21 +103,165 @@ async function _rawCheckRpc(wsUrl: string): Promise<boolean> {
+ }
+ 
+ /**
+- * Fetch all statements from the node using statement_subscribeStatement.
+- * Works on People chain (no statement_dump needed) and on local nodes.
+- * The node sends existing statements in batches, resolving when remaining === 0.
++ * Fetch all statements from the node using statement_subscribeStatement over a
++ * plain WebSocket — no substrate-client / lazyClient / ws-provider layers.
++ *
++ * Works on People chain and on local nodes. The node sends existing statements
++ * in batches, resolving when `remaining === 0`. We avoid
++ * `createStatementSdk().getStatements()` (TDZ bug when the first batch fires
++ * synchronously) and avoid the polkadot-api WS stack (which opens a full
++ * chainHead follow and processes every message through multiple JSON.parse
++ * layers that each can explode on malformed payloads).
+  */
++const STMT_FETCH_TIMEOUT_MS = 8000;
++const STMT_DEBUG =
++	typeof window !== "undefined" &&
++	(window as { __STMT_DEBUG__?: boolean }).__STMT_DEBUG__ === true;
++
+ async function _sdkFetch(wsUrl: string): Promise<DecodedStatement[]> {
+ 	const storeUrl = resolveStatementStoreUrl(wsUrl);
+-	// WsJsonRpcProvider extends JsonRpcProvider structurally; cast resolves cross-package type mismatch.
++	if (STMT_DEBUG) console.debug("[StmtStore] connecting to", storeUrl);
++	const ws = new WebSocket(storeUrl);
+ 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+-	const provider = getWsProvider(storeUrl) as any;
+-	const client = createLazyClient(provider);
+-	const sdk = createStatementSdk(client.getRequestFn(), client.getSubscribeFn());
++	const collected: any[] = [];
++	let subscriptionId: string | null = null;
++
+ 	try {
+ 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+-		const stmts = await (sdk.getStatements as (f: string) => Promise<any[]>)("any");
+-		return stmts
++		const decoded: any[] = await new Promise((resolve, reject) => {
++			let settled = false;
++			const timeoutId = setTimeout(() => {
++				if (settled) return;
++				console.warn(
++					`[StmtStore] no terminal batch within ${STMT_FETCH_TIMEOUT_MS}ms — resolving with ${collected.length} collected statements`,
++				);
++				settled = true;
++				resolve(collected);
++			}, STMT_FETCH_TIMEOUT_MS);
++
++			const done = () => {
++				if (settled) return;
++				settled = true;
++				clearTimeout(timeoutId);
++				try {
++					if (subscriptionId !== null) {
++						ws.send(
++							JSON.stringify({
++								jsonrpc: "2.0",
++								id: 2,
++								method: "statement_unsubscribeStatement",
++								params: [subscriptionId],
++							}),
++						);
++					}
++				} catch {
++					// socket may already be closing
++				}
++				resolve(collected);
++			};
++
++			const fail = (err: Error) => {
++				if (settled) return;
++				settled = true;
++				clearTimeout(timeoutId);
++				reject(err);
++			};
++
++			ws.addEventListener("open", () => {
++				if (STMT_DEBUG) console.debug("[StmtStore] ws open, sending subscribe");
++				ws.send(
++					JSON.stringify({
++						jsonrpc: "2.0",
++						id: 1,
++						method: "statement_subscribeStatement",
++						params: ["any"],
++					}),
++				);
++			});
++
++			ws.addEventListener("message", (ev) => {
++				if (typeof ev.data !== "string") return;
++				if (STMT_DEBUG) console.debug("[StmtStore] msg", ev.data);
++				let parsed: {
++					id?: number;
++					result?: unknown;
++					error?: { message?: string };
++					method?: string;
++					params?: { subscription?: string; result?: unknown };
++				};
++				try {
++					parsed = JSON.parse(ev.data);
++				} catch {
++					return;
++				}
++
++				// Response to the subscribe request.
++				if (parsed.id === 1) {
++					if (parsed.error) {
++						fail(new Error(parsed.error.message ?? "subscribe failed"));
++						return;
++					}
++					if (typeof parsed.result === "string") {
++						subscriptionId = parsed.result;
++					}
++					return;
++				}
++
++				// Subscription notifications. The notification method name is
++				// `statement_statement` (singular) — confirmed on Paseo People chain.
++				if (
++					parsed.method === "statement_statement" &&
++					parsed.params?.subscription === subscriptionId
++				) {
++					// The node may serialize StatementEvent as either
++					// { event: "newStatements", data: {...} } (adjacently tagged) or
++					// { newStatements: {...} } (externally tagged) depending on
++					// substrate serde config. Normalize both shapes.
++					// eslint-disable-next-line @typescript-eslint/no-explicit-any
++					const raw = parsed.params.result as any;
++					let statements: unknown[] | undefined;
++					let remaining: number | undefined;
++					if (raw?.event === "newStatements") {
++						statements = raw.data?.statements;
++						remaining = raw.data?.remaining;
++					} else if (raw?.newStatements) {
++						statements = raw.newStatements.statements;
++						remaining = raw.newStatements.remaining;
++					} else if (Array.isArray(raw?.statements)) {
++						statements = raw.statements;
++						remaining = raw.remaining;
++					}
++					if (statements === undefined && remaining === undefined) return;
++
++					for (const encoded of statements ?? []) {
++						try {
++							collected.push(statementCodec.dec(encoded as never));
++						} catch (e) {
++							if (STMT_DEBUG) console.debug("[StmtStore] decode skip", e);
++						}
++					}
++					if (remaining === 0 || remaining === undefined) {
++						done();
++					}
++				}
++			});
++
++			ws.addEventListener("error", () => {
++				fail(new Error("Statement Store WebSocket error"));
++			});
++
++			ws.addEventListener("close", () => {
++				// Close before done() resolves means we never got a terminal batch.
++				// Treat as end-of-data — the cache still gets whatever we collected.
++				if (!settled) {
++					settled = true;
++					clearTimeout(timeoutId);
++					resolve(collected);
++				}
++			});
++		});
++
++		return decoded
+ 			.filter((s) => s.data instanceof Uint8Array && s.data.length > 0)
+ 			.map((s) => {
+ 				const data = s.data as Uint8Array;
+@@ -185,19 +277,68 @@ async function _sdkFetch(wsUrl: string): Promise<DecodedStatement[]> {
+ 				} satisfies DecodedStatement;
+ 			});
+ 	} finally {
+-		client.disconnect();
++		try {
++			ws.close();
++		} catch {
++			// already closed
++		}
+ 	}
+ }
+ 
++function makeExpiry(): bigint {
++	// Upper 32 bits: absolute expiration (unix seconds, ~1 year out).
++	// Lower 32 bits: sequence number (best-effort unique per-process).
++	const expSec = BigInt(Math.floor(Date.now() / 1000) + 31_536_000);
++	const seq = BigInt(Date.now() & 0xffffffff);
++	return (expSec << 32n) | seq;
++}
++
+ async function _rawSubmit(
+ 	wsUrl: string,
+ 	fileBytes: Uint8Array,
+ 	publicKey: Uint8Array,
+ 	sign: (message: Uint8Array) => Uint8Array | Promise<Uint8Array>,
+ ): Promise<void> {
+-	const signaturePayload = buildStatementSignaturePayload(fileBytes);
+-	const signature = await sign(signaturePayload);
+-	const encoded = buildSignedStatement(fileBytes, publicKey, signature);
++	// Paseo People chain (and any substrate statement_store runtime) rejects
++	// statements that are just `{proof, data}` — they must carry at least
++	// `expiry` + `topics`. Empirically verified against 961 live statements:
++	// all have expiry, all have topics, none have the 2-field shape our earlier
++	// raw path produced. Build the statement via the exported `statementCodec`
++	// so the shape matches the runtime's expectations exactly.
++	//
++	// The codec's `enc` expects hex strings (0x-prefixed) for fixed-size fields
++	// (signature, signer, topic), bigint for expiry, and Uint8Array for data —
++	// confirmed by round-tripping existing statements from the store.
++	ensureFixedLength(publicKey, 32, "Statement Store public key");
++
++	const expiry = makeExpiry();
++	const topics = ["0x" + bytesToHex(GLOBAL_TOPIC)];
++	const signerHex = "0x" + bytesToHex(publicKey);
++
++	// Signing payload = SCALE-encoded statement WITHOUT the proof field, with
++	// the outer Vec compact-length prefix stripped. This matches
++	// sp_statement_store::Statement::signature_material (see
++	// @novasamatech/sdk-statement's getStatementSigner for reference).
++	// eslint-disable-next-line @typescript-eslint/no-explicit-any
++	const signingPayloadFull = (statementCodec as any).enc({
++		expiry,
++		topics,
++		data: fileBytes,
++	}) as Uint8Array;
++	const compactLen = compact.enc(compact.dec(signingPayloadFull)).length;
++	const signingPayload = signingPayloadFull.slice(compactLen);
++
++	const signatureBytes = await sign(signingPayload);
++	ensureFixedLength(signatureBytes, 64, "Statement Store signature");
++	const signatureHex = "0x" + bytesToHex(signatureBytes);
++
++	// eslint-disable-next-line @typescript-eslint/no-explicit-any
++	const encoded = (statementCodec as any).enc({
++		proof: { type: "sr25519", value: { signature: signatureHex, signer: signerHex } },
++		expiry,
++		topics,
++		data: fileBytes,
++	}) as Uint8Array;
+ 
+ 	if (encoded.length > MAX_STATEMENT_STORE_ENCODED_SIZE) {
+ 		throw new Error(
+@@ -223,6 +364,19 @@ async function _rawSubmit(
+ 			`Statement Store error: ${result.error.message}${result.error.data ? ` (${JSON.stringify(result.error.data)})` : ""}`,
+ 		);
+ 	}
++	// The RPC returns 200 OK even when the statement is rejected by the runtime.
++	// Treat anything other than an OK-ish status as failure — otherwise the
++	// caller proceeds to write `ciphertextHash` on-chain referencing bytes that
++	// will never land in the store.
++	const status: unknown = result?.result?.status;
++	if (typeof status === "string" && status !== "ok" && !status.startsWith("ok")) {
++		const reason = result?.result?.reason ?? "unknown";
++		const hint =
++			reason === "noAllowance"
++				? " — the signer key has no allowance on this statement store. Fund its SS58 address with a small balance on the People chain, or submit via a Nova Wallet account."
++				: "";
++		throw new Error(`Statement Store ${status}: ${reason}${hint}`);
++	}
+ }
+ 
+ export interface DecodedStatement {
