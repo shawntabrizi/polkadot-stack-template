@@ -69,6 +69,10 @@ Compiles contracts, derives the multisig address from `Council1.json` / `Council
 
 **No on-chain physician identity**: medic registry is a multisig-owned contract. People Chain KnownGood identity integration is next.
 
+**Statement Store asymmetry**: `statement_submit` is only available on the People Chain collator on Paseo, not Asset Hub. The resolver in `useStatementStore.ts` auto-routes around this, but it's a testnet gap worth filing upstream.
+
+**Synthetic data only**: no real patients, no legal review. MVP uses test records only. GDPR / HIPAA legal opinion required before processing real health data.
+
 ---
 
 ## Design Compromises
