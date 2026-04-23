@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { type Address, formatEther, parseEther } from "viem";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
-import VerifiedBadge from "../components/VerifiedBadge";
 import Spinner from "../components/Spinner";
 import Toast from "../components/Toast";
 import { getDeploymentForRpc } from "../config/network";
 import { subscribeStatements, fetchStatementByHash } from "../hooks/useStatementStore";
-import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
 import { useReviveCall } from "../hooks/useReviveCall";
 import { useChainStore } from "../store/chainStore";
 import {
@@ -110,8 +108,8 @@ export default function ResearcherBuy() {
 	const storageKey = `medical-market-address:${ethRpcUrl}`;
 	const defaultAddress = getDeploymentForRpc(ethRpcUrl).medicalMarket;
 
-	const [accounts, setAccounts] = useState<AppAccount[]>(devAccounts);
-	const [selectedAccountIndex, setSelectedAccountIndex] = useState(0);
+	const accounts = useChainStore((s) => s.accounts);
+	const selectedAccountIndex = useChainStore((s) => s.selectedAccountIndex);
 	const [contractAddress, setContractAddress] = useState("");
 	const [listings, setListings] = useState<Listing[]>([]);
 	const [orders, setOrders] = useState<Order[]>([]);
@@ -126,12 +124,6 @@ export default function ResearcherBuy() {
 		const { unsubscribe } = subscribeStatements(wsUrl, setStmtCache);
 		return unsubscribe;
 	}, [wsUrl]);
-
-	useEffect(() => {
-		getAccountsWithFallback()
-			.then(setAccounts)
-			.catch(() => setAccounts(devAccounts));
-	}, []);
 
 	useEffect(() => {
 		const stored = localStorage.getItem(storageKey);
@@ -513,17 +505,12 @@ export default function ResearcherBuy() {
 
 				<div>
 					<label className="label">Account (Researcher)</label>
-					<select
-						value={selectedAccountIndex}
-						onChange={(e) => setSelectedAccountIndex(parseInt(e.target.value))}
-						className="input-field w-full"
-					>
-						{accounts.map((acc, i) => (
-							<option key={acc.address} value={i}>
-								{acc.name} ({acc.evmAddress})
-							</option>
-						))}
-					</select>
+					<div className="input-field w-full text-sm text-text-secondary">
+						{accounts[selectedAccountIndex]?.name ?? "—"}{" "}
+						<span className="font-mono text-xs text-text-muted">
+							{accounts[selectedAccountIndex]?.evmAddress ?? ""}
+						</span>
+					</div>
 				</div>
 
 				<Toast message={txStatus} onClose={() => setTxStatus(null)} />
@@ -710,9 +697,6 @@ export default function ResearcherBuy() {
 												</div>
 											);
 										})()}
-										<div>
-											<VerifiedBadge address={listing.patient} />
-										</div>
 									</div>
 								);
 							})}

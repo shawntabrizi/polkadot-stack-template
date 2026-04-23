@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { type Address, parseEther, formatEther } from "viem";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
-import VerifiedBadge from "../components/VerifiedBadge";
 import Spinner from "../components/Spinner";
 import Toast from "../components/Toast";
 import { getDeploymentForRpc } from "../config/network";
@@ -12,7 +11,6 @@ import {
 	MARKETPLACE_ACCOUNT_ID,
 } from "../hooks/useStatementStore";
 import { blake2b } from "blakejs";
-import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
 import { useReviveCall, hexToBytes } from "../hooks/useReviveCall";
 import { useChainStore } from "../store/chainStore";
 import FileDropZone from "../components/FileDropZone";
@@ -57,8 +55,8 @@ export default function PatientDashboard() {
 	const storageKey = `medical-market-address:${ethRpcUrl}`;
 	const defaultAddress = getDeploymentForRpc(ethRpcUrl).medicalMarket;
 
-	const [accounts, setAccounts] = useState<AppAccount[]>(devAccounts);
-	const [selectedAccountIndex, setSelectedAccountIndex] = useState(0);
+	const accounts = useChainStore((s) => s.accounts);
+	const selectedAccountIndex = useChainStore((s) => s.selectedAccountIndex);
 	const [contractAddress, setContractAddress] = useState("");
 	const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
 	const [importedPackage, setImportedPackage] = useState<SignedRecord | null>(null);
@@ -69,12 +67,6 @@ export default function PatientDashboard() {
 	const [expandedListings, setExpandedListings] = useState<Set<string>>(new Set());
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
-
-	useEffect(() => {
-		getAccountsWithFallback()
-			.then(setAccounts)
-			.catch(() => setAccounts(devAccounts));
-	}, []);
 
 	useEffect(() => {
 		const stored = localStorage.getItem(storageKey);
@@ -458,17 +450,12 @@ export default function PatientDashboard() {
 
 				<div>
 					<label className="label">Account (Patient)</label>
-					<select
-						value={selectedAccountIndex}
-						onChange={(e) => setSelectedAccountIndex(parseInt(e.target.value))}
-						className="input-field w-full"
-					>
-						{accounts.map((acc, i) => (
-							<option key={acc.address} value={i}>
-								{acc.name} ({acc.evmAddress})
-							</option>
-						))}
-					</select>
+					<div className="input-field w-full text-sm text-text-secondary">
+						{accounts[selectedAccountIndex]?.name ?? "—"}{" "}
+						<span className="font-mono text-xs text-text-muted">
+							{accounts[selectedAccountIndex]?.evmAddress ?? ""}
+						</span>
+					</div>
 				</div>
 			</div>
 
@@ -610,11 +597,6 @@ export default function PatientDashboard() {
 												{bytesToHex(hexToBytes(commitHex)).slice(0, 18)}…
 												{commitHex.slice(-8)}
 											</p>
-											<div className="mt-1">
-												<VerifiedBadge
-													address={listing.patient as `0x${string}`}
-												/>
-											</div>
 										</div>
 										<span
 											className={`text-xs font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${

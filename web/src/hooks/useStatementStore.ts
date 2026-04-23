@@ -4,7 +4,7 @@ import {
 	type SignedStatement,
 } from "@novasamatech/product-sdk";
 import { createLazyClient } from "@novasamatech/statement-store";
-import { createStatementSdk } from "@novasamatech/sdk-statement";
+import { createStatementSdk, statementCodec } from "@novasamatech/sdk-statement";
 import { getWsProvider } from "polkadot-api/ws-provider/web";
 import { Bytes, compact, u8 } from "@polkadot-api/substrate-bindings";
 import { blake2b } from "blakejs";
@@ -118,10 +118,17 @@ function wsToHttp(wsUrl: string): string {
 
 /**
  * Map an Asset Hub wsUrl to the correct Statement Store endpoint.
- * On local dev the same node serves both; on Paseo the Statement Store
- * runs on People chain, not Asset Hub.
+ *
+ * Resolution order:
+ *   1. `VITE_STATEMENT_STORE_WS_URL` env override — enables the "hybrid" demo
+ *      (contracts on Paseo, Statement Store on a local node).
+ *   2. Local wsUrl → same wsUrl (local dev: one node serves both).
+ *   3. Non-local wsUrl → Paseo People chain (testnet Statement Store).
  */
 function resolveStatementStoreUrl(wsUrl: string): string {
+	const override = import.meta.env.VITE_STATEMENT_STORE_WS_URL;
+	if (typeof override === "string" && override.length > 0) return override;
+
 	const isLocal =
 		wsUrl.includes("localhost") || wsUrl.includes("127.0.0.1") || wsUrl.includes("192.168.");
 	return isLocal ? wsUrl : STATEMENT_STORE_TESTNET_WS_URL;
@@ -155,12 +162,24 @@ async function _rawCheckRpc(wsUrl: string): Promise<boolean> {
 }
 
 /**
- * Fetch all statements from the node using statement_subscribeStatement.
- * Works on People chain (no statement_dump needed) and on local nodes.
- * The node sends existing statements in batches, resolving when remaining === 0.
+ * Fetch all statements from the node.
+ *
+ * Prefers `statement_dump` (HTTP POST) when the node exposes it — this is the
+ * simpler, one-shot path the local template runtime ships with. Falls back to
+ * the SDK's subscribe-based `getStatements` for nodes that only expose
+ * `statement_subscribeStatement` (Paseo People chain).
+ *
+ * The SDK path is patched via `web/scripts/patch-sdk-statement.mjs` (postinstall)
+ * to fix a TDZ bug in `getStatements`; see POLKADOT_INTEGRATION_GOTCHAS.md #15.
  */
 async function _sdkFetch(wsUrl: string): Promise<DecodedStatement[]> {
 	const storeUrl = resolveStatementStoreUrl(wsUrl);
+
+	// 1) Try statement_dump — works on local template runtimes, absent on Paseo.
+	const dumped = await _tryDump(storeUrl);
+	if (dumped !== null) return dumped;
+
+	// 2) Fall back to the SDK's subscribe-based getStatements.
 	// WsJsonRpcProvider extends JsonRpcProvider structurally; cast resolves cross-package type mismatch.
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const provider = getWsProvider(storeUrl) as any;
@@ -187,6 +206,52 @@ async function _sdkFetch(wsUrl: string): Promise<DecodedStatement[]> {
 	} finally {
 		client.disconnect();
 	}
+}
+
+/**
+ * Try `statement_dump` via HTTP JSON-RPC. Returns the decoded statements on
+ * success, or `null` if the node doesn't expose the method (treat as signal
+ * to fall back to the subscribe path). Network errors also return `null`.
+ */
+async function _tryDump(storeUrl: string): Promise<DecodedStatement[] | null> {
+	const httpUrl = wsToHttp(storeUrl);
+	let json: { result?: string[]; error?: { message?: string } };
+	try {
+		const r = await fetch(httpUrl, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "statement_dump", params: [] }),
+		});
+		json = await r.json();
+	} catch {
+		return null;
+	}
+	if (json.error) return null;
+	const hexes: string[] = json.result ?? [];
+
+	const out: DecodedStatement[] = [];
+	for (const hex of hexes) {
+		let stmt: { data?: Uint8Array };
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			stmt = (statementCodec as any).dec(hex);
+		} catch {
+			continue;
+		}
+		if (!(stmt.data instanceof Uint8Array) || stmt.data.length === 0) continue;
+		const data = stmt.data;
+		const hash = "0x" + bytesToHex(blake2b(data, undefined, 32));
+		out.push({
+			hash,
+			signer: null,
+			proofType: null,
+			dataLength: data.length,
+			data,
+			topics: [],
+			priority: null,
+		});
+	}
+	return out;
 }
 
 async function _rawSubmit(

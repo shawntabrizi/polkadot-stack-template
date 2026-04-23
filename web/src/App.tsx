@@ -4,6 +4,7 @@ import { hostApi } from "@novasamatech/product-sdk";
 import { enumValue } from "@novasamatech/host-api";
 import { useChainStore } from "./store/chainStore";
 import { useConnectionManagement } from "./hooks/useConnection";
+import WalletSelector from "./components/WalletSelector";
 
 function isInHost(): boolean {
 	if (typeof window === "undefined") return false;
@@ -68,80 +69,59 @@ export default function App() {
 			<nav className="sticky top-0 z-50 border-b border-white/[0.08] backdrop-blur-2xl bg-surface-950/90">
 				<div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-6">
 					<Link to="/" className="flex items-center gap-3 shrink-0 group">
-						<div className="w-9 h-9 rounded-xl bg-gradient-to-br from-polka-400 via-polka-600 to-[#0891b2] flex items-center justify-center shadow-glow group-hover:shadow-glow-lg transition-all duration-300">
+						<div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#0891b2] via-polka-600 to-polka-400 flex items-center justify-center shadow-glow group-hover:shadow-glow-lg transition-all duration-300">
 							<svg viewBox="0 0 20 20" className="w-5 h-5" fill="none">
-								<circle cx="10" cy="10" r="2.5" fill="white" />
-								<circle cx="10" cy="3" r="1.4" fill="white" opacity="0.9" />
-								<circle cx="16" cy="6.5" r="1.4" fill="white" opacity="0.9" />
-								<circle cx="16" cy="13.5" r="1.4" fill="white" opacity="0.9" />
-								<circle cx="10" cy="17" r="1.4" fill="white" opacity="0.9" />
-								<circle cx="4" cy="13.5" r="1.4" fill="white" opacity="0.9" />
-								<circle cx="4" cy="6.5" r="1.4" fill="white" opacity="0.9" />
-								<line
-									x1="10"
-									y1="7.5"
-									x2="10"
-									y2="4.4"
+								{/* Shield */}
+								<path
+									d="M10 1.8 C7.2 1.8 3.8 3.2 3.8 5.6 V10.8 C3.8 14.8 10 18.4 10 18.4 C10 18.4 16.2 14.8 16.2 10.8 V5.6 C16.2 3.2 12.8 1.8 10 1.8 Z"
+									fill="white"
+									fillOpacity="0.18"
 									stroke="white"
-									strokeWidth="0.8"
-									opacity="0.45"
+									strokeWidth="1.1"
+									strokeLinejoin="round"
 								/>
-								<line
-									x1="10"
-									y1="12.5"
-									x2="10"
-									y2="15.6"
+								{/* Folder tab */}
+								<path
+									d="M6.8 7.8 L8.2 7.8 L9 7 L11.2 7 L11.2 7.8"
 									stroke="white"
-									strokeWidth="0.8"
-									opacity="0.45"
+									strokeWidth="0.9"
+									strokeLinejoin="round"
+									strokeLinecap="round"
 								/>
-								<line
-									x1="10"
-									y1="7.8"
-									x2="14.7"
-									y2="7.9"
+								{/* Folder body */}
+								<rect
+									x="6.8"
+									y="7.8"
+									width="6.4"
+									height="5.2"
+									rx="0.9"
+									fill="white"
+									fillOpacity="0.28"
 									stroke="white"
-									strokeWidth="0.8"
-									opacity="0.45"
+									strokeWidth="0.9"
 								/>
-								<line
-									x1="10"
-									y1="12.2"
-									x2="14.7"
-									y2="12.1"
-									stroke="white"
-									strokeWidth="0.8"
-									opacity="0.45"
+								{/* Medical cross — vertical */}
+								<rect
+									x="9.3"
+									y="9.3"
+									width="1.4"
+									height="3.2"
+									rx="0.5"
+									fill="white"
 								/>
-								<line
-									x1="10"
-									y1="7.8"
-									x2="5.3"
-									y2="7.9"
-									stroke="white"
-									strokeWidth="0.8"
-									opacity="0.45"
-								/>
-								<line
-									x1="10"
-									y1="12.2"
-									x2="5.3"
-									y2="12.1"
-									stroke="white"
-									strokeWidth="0.8"
-									opacity="0.45"
-								/>
+								{/* Medical cross — horizontal */}
+								<rect x="8" y="10.3" width="4" height="1.4" rx="0.5" fill="white" />
 							</svg>
 						</div>
 						<div className="flex flex-col leading-none gap-0.5">
 							<span className="text-sm font-bold text-text-primary font-display tracking-tight">
-								Polkadot
+								OwnMed
 							</span>
 							<span
 								className="font-medium tracking-widest uppercase"
 								style={{ fontSize: "0.6rem", color: "#06b6d4" }}
 							>
-								Stack Template
+								Patient-Owned
 							</span>
 						</div>
 					</Link>
@@ -175,18 +155,17 @@ export default function App() {
 						)}
 					</div>
 
-					{/* Connection indicator */}
-					<div className="ml-auto flex items-center gap-2 shrink-0">
+					{/* Right side: wallet selector + connection dot */}
+					<div className="ml-auto flex items-center gap-3 shrink-0">
+						<WalletSelector />
 						<span
 							className={`w-2 h-2 rounded-full transition-colors duration-500 ${
 								connected
 									? "bg-accent-green shadow-[0_0_6px_rgba(52,211,153,0.5)]"
 									: "bg-text-muted"
 							}`}
+							title={connected ? "Connected" : "Offline"}
 						/>
-						<span className="text-xs text-text-tertiary hidden sm:inline">
-							{connected ? "Connected" : "Offline"}
-						</span>
 					</div>
 				</div>
 			</nav>

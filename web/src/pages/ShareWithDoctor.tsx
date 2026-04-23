@@ -11,7 +11,6 @@ import {
 	MARKETPLACE_ACCOUNT_ID,
 } from "../hooks/useStatementStore";
 import { blake2b } from "blakejs";
-import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
 import { useReviveCall } from "../hooks/useReviveCall";
 import { useChainStore } from "../store/chainStore";
 import FileDropZone from "../components/FileDropZone";
@@ -168,8 +167,8 @@ export default function ShareWithDoctor() {
 	const storageKey = `medical-market-address:${ethRpcUrl}`;
 	const defaultAddress = getDeploymentForRpc(ethRpcUrl).medicalMarket;
 
-	const [accounts, setAccounts] = useState<AppAccount[]>(devAccounts);
-	const [selectedAccountIndex, setSelectedAccountIndex] = useState(0);
+	const accounts = useChainStore((s) => s.accounts);
+	const selectedAccountIndex = useChainStore((s) => s.selectedAccountIndex);
 	const [contractAddress, setContractAddress] = useState("");
 	const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
 	const [importedPackage, setImportedPackage] = useState<SignedRecord | null>(null);
@@ -189,12 +188,6 @@ export default function ShareWithDoctor() {
 		txHash: string;
 		recipient: { x: bigint; y: bigint };
 	} | null>(null);
-
-	useEffect(() => {
-		getAccountsWithFallback()
-			.then(setAccounts)
-			.catch(() => setAccounts(devAccounts));
-	}, []);
 
 	useEffect(() => {
 		const state = location.state as { signedRecord?: SignedRecord; listingId?: string } | null;
@@ -510,17 +503,12 @@ export default function ShareWithDoctor() {
 
 				<div>
 					<label className="label">Account (Patient)</label>
-					<select
-						value={selectedAccountIndex}
-						onChange={(e) => setSelectedAccountIndex(parseInt(e.target.value))}
-						className="input-field w-full"
-					>
-						{accounts.map((acc, i) => (
-							<option key={acc.address} value={i}>
-								{acc.name} ({acc.evmAddress})
-							</option>
-						))}
-					</select>
+					<div className="input-field w-full text-sm text-text-secondary">
+						{accounts[selectedAccountIndex]?.name ?? "—"}{" "}
+						<span className="font-mono text-xs text-text-muted">
+							{accounts[selectedAccountIndex]?.evmAddress ?? ""}
+						</span>
+					</div>
 				</div>
 			</div>
 

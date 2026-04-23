@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { getStoredEthRpcUrl, getStoredWsUrl } from "../config/network";
+import { devAccounts, type AppAccount } from "../hooks/useAccount";
 
 export interface PalletAvailability {
 	revive: boolean | null;
@@ -13,6 +14,9 @@ interface ChainState {
 	selectedAccount: number;
 	txStatus: string | null;
 	pallets: PalletAvailability;
+	accounts: AppAccount[];
+	selectedAccountIndex: number;
+	connectedWallet: string | null;
 	setWsUrl: (url: string) => void;
 	setEthRpcUrl: (url: string) => void;
 	setConnected: (connected: boolean) => void;
@@ -20,6 +24,9 @@ interface ChainState {
 	setSelectedAccount: (index: number) => void;
 	setTxStatus: (status: string | null) => void;
 	setPallets: (pallets: PalletAvailability) => void;
+	setAccounts: (accounts: AppAccount[]) => void;
+	setSelectedAccountIndex: (index: number) => void;
+	setConnectedWallet: (name: string | null) => void;
 }
 
 export const useChainStore = create<ChainState>((set) => ({
@@ -30,6 +37,9 @@ export const useChainStore = create<ChainState>((set) => ({
 	selectedAccount: 0,
 	txStatus: null,
 	pallets: { revive: null },
+	accounts: devAccounts,
+	selectedAccountIndex: 0,
+	connectedWallet: null,
 	setWsUrl: (wsUrl) => {
 		localStorage.setItem("ws-url", wsUrl);
 		set({ wsUrl });
@@ -43,4 +53,7 @@ export const useChainStore = create<ChainState>((set) => ({
 	setSelectedAccount: (index) => set({ selectedAccount: index }),
 	setTxStatus: (txStatus) => set({ txStatus }),
 	setPallets: (pallets) => set({ pallets }),
+	setAccounts: (accounts) => set({ accounts }),
+	setSelectedAccountIndex: (index) => set({ selectedAccountIndex: index }),
+	setConnectedWallet: (name) => set({ connectedWallet: name }),
 }));

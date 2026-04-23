@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { parseAbiItem } from "viem";
 import { getDeploymentForRpc } from "../config/network";
 import { getPublicClient } from "../config/evm";
-import { devAccounts, getAccountsWithFallback, type AppAccount } from "../hooks/useAccount";
 import { getClient } from "../hooks/useChain";
 import { getStackTemplateDescriptor } from "../hooks/useConnection";
 import { useChainStore } from "../store/chainStore";
@@ -11,16 +9,18 @@ import Spinner from "../components/Spinner";
 import Toast from "../components/Toast";
 import {
 	medicAuthorityFullAbi,
-	encodeAuthorityCall,
-	buildReviveInnerTx,
+	buildInnerCallForAction,
 	otherSignatoriesFor,
-	computeCallHash,
 	propose,
 	approve,
 	getPendingForCall,
 	listPending,
 	submitHintProposal,
-	type AuthorityMethod,
+	ensureMapped,
+	isMapped,
+	isStaleProposalError,
+	NO_TARGET,
+	type GovernanceAction,
 	type MultisigInfo,
 	type Timepoint,
 } from "../lib/multisigAuthority";
@@ -29,7 +29,7 @@ import {
 const HINTS_KEY = "medic-authority-pending";
 
 interface PendingHint {
-	action: AuthorityMethod;
+	action: GovernanceAction;
 	target: `0x${string}`;
 	proposedAt: number;
 }
@@ -68,11 +68,12 @@ function shortHash(h: string) {
 	return `${h.slice(0, 10)}…${h.slice(-8)}`;
 }
 
-function actionLabel(method: AuthorityMethod): string {
+function actionLabel(method: GovernanceAction): string {
 	return {
 		addMedic: "Add Medic",
 		removeMedic: "Remove Medic",
 		transferOwnership: "Transfer Ownership",
+		mapAccount: "Map Multisig (Revive.map_account)",
 	}[method];
 }
 
@@ -84,39 +85,46 @@ export default function GovernanceDashboard() {
 	const ms = deployment.multisig;
 	const authorityAddr = deployment.medicAuthority as `0x${string}` | null;
 
-	// All wallet accounts
-	const [accounts, setAccounts] = useState<AppAccount[]>(devAccounts);
-	// Signatories = wallet accounts whose SS58 is in ms.signatories (for propose/approve dropdowns)
+	const accounts = useChainStore((s) => s.accounts);
 	const signatoryAccounts = accounts.filter((a) => ms?.signatories.includes(a.address));
 	const [proposerIdx, setProposerIdx] = useState(0);
 	const [approverIdx, setApproverIdx] = useState(1);
 
+	// Debug banners hidden by default. Enable via `?debug=1` in the URL or
+	// `localStorage.governanceDebug = "1"`. Persists once set via URL so a hard reload keeps it.
+	const [showDebug] = useState<boolean>(() => {
+		if (typeof window === "undefined") return false;
+		const fromUrl = new URLSearchParams(window.location.search).get("debug") === "1";
+		if (fromUrl) localStorage.setItem("governanceDebug", "1");
+		return fromUrl || localStorage.getItem("governanceDebug") === "1";
+	});
+
 	// Owner / medic status
 	const [contractOwner, setContractOwner] = useState<string | null>(null);
 	const [medicStatuses, setMedicStatuses] = useState<Record<string, boolean | null>>({});
+	const [multisigMapped, setMultisigMapped] = useState<boolean | null>(null);
 
 	// Proposal form
-	const [actionMethod, setActionMethod] = useState<AuthorityMethod>("addMedic");
+	const [actionMethod, setActionMethod] = useState<GovernanceAction>("addMedic");
 	const [actionTarget, setActionTarget] = useState("");
 
 	// Pending on-chain entries
 	const [pendingEntries, setPendingEntries] = useState<PendingEntry[]>([]);
 
-	// Per-entry override state for entries without a localStorage hint
-	const [overrides, setOverrides] = useState<
-		Record<`0x${string}`, { action: AuthorityMethod; target: string; hashOk: null | boolean }>
+	// Per-entry guess for hintless pending entries (different browser / hint tx failed)
+	const [guesses, setGuesses] = useState<
+		Record<`0x${string}`, { action: GovernanceAction; target: string }>
 	>({});
 
-	const getOverride = (callHash: `0x${string}`) =>
-		overrides[callHash] ?? { action: "addMedic" as AuthorityMethod, target: "", hashOk: null };
+	const getGuess = (callHash: `0x${string}`) =>
+		guesses[callHash] ?? { action: "addMedic" as GovernanceAction, target: "" };
 
-	function setOverrideField(callHash: `0x${string}`, field: "action" | "target", value: string) {
-		setOverrides((prev) => ({
+	function setGuessField(callHash: `0x${string}`, field: "action" | "target", value: string) {
+		setGuesses((prev) => ({
 			...prev,
 			[callHash]: {
 				...(prev[callHash] ?? { action: "addMedic", target: "" }),
 				[field]: value,
-				hashOk: null,
 			},
 		}));
 	}
@@ -128,12 +136,6 @@ export default function GovernanceDashboard() {
 
 	const [txStatus, setTxStatus] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
-
-	useEffect(() => {
-		getAccountsWithFallback()
-			.then(setAccounts)
-			.catch(() => setAccounts(devAccounts));
-	}, []);
 
 	const readStatuses = useCallback(async () => {
 		if (!authorityAddr) return;
@@ -178,46 +180,43 @@ export default function GovernanceDashboard() {
 			const client = getClient(wsUrl);
 			const descriptor = await getStackTemplateDescriptor();
 			const api = client.getTypedApi(descriptor);
+			setMultisigMapped(await isMapped(api, ms.h160 as `0x${string}`));
 			const entries = await listPending(api, ms.ss58);
 			const hints = loadHints();
 
-			// For entries without a cached localStorage hint, query ProposalHinted EVM logs
+			// For entries without a cached localStorage hint, read the persistent
+			// Proposal mapping on MedicAuthority. This is a deterministic view call
+			// against contract storage — no log indexer, no archival-node dependency.
 			const evmClient = getPublicClient(ethRpcUrl);
-			const proposalHintedEvent = parseAbiItem(
-				"event ProposalHinted(bytes32 indexed callHash, string action, address target)",
-			);
 			const missingHashes = entries
 				.filter((e) => !lookupHint(hints, e.callHash))
 				.map((e) => e.callHash);
 
 			if (missingHashes.length > 0) {
-				for (const callHash of missingHashes) {
-					try {
-						const logs = await evmClient.getLogs({
-							address: authorityAddr,
-							event: proposalHintedEvent,
-							args: { callHash },
-							fromBlock: 0n,
-						});
-						if (logs.length > 0) {
-							const last = logs[logs.length - 1];
-							const { action, target } = last.args as {
-								action: string;
-								target: string;
-							};
-							if (action && target) {
-								const hint: PendingHint = {
-									action: action as AuthorityMethod,
-									target: target as `0x${string}`,
-									proposedAt: 0,
-								};
-								saveHint(callHash, hint);
-								hints[callHash.toLowerCase()] = hint;
-							}
-						}
-					} catch {
-						// log query failed for this entry — leave hint undefined
-					}
+				const results = await Promise.all(
+					missingHashes.map((callHash) =>
+						evmClient
+							.readContract({
+								address: authorityAddr,
+								abi: medicAuthorityFullAbi,
+								functionName: "getProposal",
+								args: [callHash],
+							})
+							.then((r) => ({ callHash, result: r as [string, string, bigint] }))
+							.catch(() => null),
+					),
+				);
+				for (const r of results) {
+					if (!r) continue;
+					const [action, target, proposedAt] = r.result;
+					if (proposedAt === 0n || !action || !target) continue;
+					const hint: PendingHint = {
+						action: action as GovernanceAction,
+						target: target as `0x${string}`,
+						proposedAt: Number(proposedAt),
+					};
+					saveHint(r.callHash, hint);
+					hints[r.callHash.toLowerCase()] = hint;
 				}
 			}
 
@@ -237,14 +236,14 @@ export default function GovernanceDashboard() {
 		return () => clearInterval(interval);
 	}, [readPending]);
 
-	async function handlePropose() {
+	async function proposeAction(action: GovernanceAction, target: `0x${string}`) {
 		if (!ms || !authorityAddr) return setTxStatus("Error: contracts not deployed");
-		const target = actionTarget.trim() as `0x${string}`;
-		if (!/^0x[0-9a-fA-F]{40}$/.test(target))
-			return setTxStatus("Error: target must be a valid H160 address (0x…)");
 
-		const proposer = (signatoryAccounts.length > 0 ? signatoryAccounts : accounts)[proposerIdx];
-		if (!proposer) return setTxStatus("Error: no account selected");
+		const proposer = signatoryAccounts[proposerIdx];
+		if (!proposer)
+			return setTxStatus(
+				"Error: no multisig signatory loaded in your wallet. Import the keystore JSONs.",
+			);
 
 		setLoading(true);
 		setTxStatus("Building inner call…");
@@ -253,19 +252,13 @@ export default function GovernanceDashboard() {
 			const descriptor = await getStackTemplateDescriptor();
 			const api = client.getTypedApi(descriptor);
 
-			const calldata = encodeAuthorityCall(actionMethod, target);
-			const innerCall = buildReviveInnerTx(api, authorityAddr, calldata);
-			const callHash = await computeCallHash(innerCall);
+			const innerCall = buildInnerCallForAction(api, action, target, authorityAddr);
 			const others = otherSignatoriesFor(ms.signatories, proposer.address);
 
 			setTxStatus("Submitting proposal…");
 			const result = await propose(api, proposer.signer, others, ms.threshold, innerCall);
 
-			saveHint(result.callHash, {
-				action: actionMethod,
-				target,
-				proposedAt: Date.now(),
-			});
+			saveHint(result.callHash, { action, target, proposedAt: Date.now() });
 
 			// Emit hint on-chain so approvers in other sessions see action + target automatically
 			try {
@@ -273,9 +266,10 @@ export default function GovernanceDashboard() {
 				await submitHintProposal(
 					api,
 					proposer.signer,
+					proposer.evmAddress,
 					authorityAddr,
 					result.callHash,
-					actionMethod,
+					action,
 					target,
 				);
 			} catch (hintErr) {
@@ -283,7 +277,7 @@ export default function GovernanceDashboard() {
 			}
 
 			setTxStatus(
-				`Proposal submitted. CallHash: ${shortHash(callHash)}  (tx: ${result.txHash.slice(0, 14)}…)`,
+				`Proposal submitted. CallHash: ${shortHash(result.callHash)}  (tx: ${result.txHash.slice(0, 14)}…)`,
 			);
 			await new Promise((r) => setTimeout(r, 3000));
 			await readPending();
@@ -295,60 +289,76 @@ export default function GovernanceDashboard() {
 		}
 	}
 
-	async function verifyOverrideHash(
-		callHash: `0x${string}`,
-		action: AuthorityMethod,
-		target: string,
-	) {
-		if (!authorityAddr || !/^0x[0-9a-fA-F]{40}$/.test(target.trim())) {
-			setOverrides((prev) => ({
-				...prev,
-				[callHash]: { ...getOverride(callHash), hashOk: null },
-			}));
-			return;
-		}
+	/**
+	 * Returns "changed" if the on-chain effect of `hint` is present, "unchanged" otherwise.
+	 * Used after approve() to catch silent inner-call reverts (pallet-multisig reports the
+	 * outer as_multi as ok even when the dispatched Revive.call reverts).
+	 */
+	async function verifyDispatchOutcome(
+		hint: PendingHint,
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		api: any,
+	): Promise<"changed" | "unchanged"> {
+		if (!authorityAddr || !ms) return "changed";
 		try {
-			const client = getClient(wsUrl);
-			const descriptor = await getStackTemplateDescriptor();
-			const api = client.getTypedApi(descriptor);
-			const calldata = encodeAuthorityCall(action, target.trim() as `0x${string}`);
-			const innerCall = buildReviveInnerTx(api, authorityAddr, calldata);
-			const computed = await computeCallHash(innerCall);
-			const ok = computed.toLowerCase() === callHash.toLowerCase();
-			setOverrides((prev) => ({ ...prev, [callHash]: { action, target, hashOk: ok } }));
-			if (ok) {
-				saveHint(callHash, {
-					action,
-					target: target.trim() as `0x${string}`,
-					proposedAt: Date.now(),
-				});
-				await readPending();
+			if (hint.action === "mapAccount") {
+				const mapped = await isMapped(api, ms.h160 as `0x${string}`);
+				return mapped ? "changed" : "unchanged";
 			}
+			const client = getPublicClient(ethRpcUrl);
+			if (hint.action === "addMedic") {
+				const verified = (await client.readContract({
+					address: authorityAddr,
+					abi: medicAuthorityFullAbi,
+					functionName: "isVerifiedMedic",
+					args: [hint.target],
+				})) as boolean;
+				return verified ? "changed" : "unchanged";
+			}
+			if (hint.action === "removeMedic") {
+				const verified = (await client.readContract({
+					address: authorityAddr,
+					abi: medicAuthorityFullAbi,
+					functionName: "isVerifiedMedic",
+					args: [hint.target],
+				})) as boolean;
+				return verified ? "unchanged" : "changed";
+			}
+			if (hint.action === "transferOwnership") {
+				const owner = (await client.readContract({
+					address: authorityAddr,
+					abi: medicAuthorityFullAbi,
+					functionName: "owner",
+				})) as string;
+				return owner.toLowerCase() === hint.target.toLowerCase() ? "changed" : "unchanged";
+			}
+			return "changed";
 		} catch {
-			setOverrides((prev) => ({
-				...prev,
-				[callHash]: { ...getOverride(callHash), hashOk: false },
-			}));
+			return "changed";
 		}
 	}
 
 	async function handleApprove(entry: PendingEntry) {
 		if (!ms || !authorityAddr) return setTxStatus("Error: contracts not deployed");
+
 		let hint = entry.hint;
 		if (!hint) {
-			const ov = getOverride(entry.callHash);
-			if (ov.hashOk !== true)
-				return setTxStatus(
-					"Error: verify the action + target first — hash must match before approving",
-				);
-			hint = { action: ov.action, target: ov.target.trim() as `0x${string}`, proposedAt: 0 };
+			const g = getGuess(entry.callHash);
+			if (g.action === "mapAccount") {
+				hint = { action: "mapAccount", target: NO_TARGET, proposedAt: 0 };
+			} else {
+				const target = g.target.trim();
+				if (!/^0x[0-9a-fA-F]{40}$/.test(target))
+					return setTxStatus("Error: enter a valid target H160 address");
+				hint = { action: g.action, target: target as `0x${string}`, proposedAt: 0 };
+			}
 		}
-		if (!hint.target || !/^0x[0-9a-fA-F]{40}$/.test(hint.target))
-			return setTxStatus("Error: enter a valid target H160 address");
-		entry = { ...entry, hint };
 
-		const approver = (signatoryAccounts.length > 0 ? signatoryAccounts : accounts)[approverIdx];
-		if (!approver) return setTxStatus("Error: no approver selected");
+		const approver = signatoryAccounts[approverIdx];
+		if (!approver)
+			return setTxStatus(
+				"Error: no multisig signatory loaded in your wallet. Import the keystore JSONs.",
+			);
 
 		setLoading(true);
 		setTxStatus("Fetching timepoint from chain…");
@@ -357,17 +367,23 @@ export default function GovernanceDashboard() {
 			const descriptor = await getStackTemplateDescriptor();
 			const api = client.getTypedApi(descriptor);
 
+			// Auto-map the approver's H160 so the multisig-dispatched Revive.call
+			// doesn't revert with "account unmapped" on their end. The multisig's
+			// own H160 is checked separately (see multisigMapped banner) because
+			// only the multisig itself can register its mapping.
+			await ensureMapped(api, approver.signer, approver.evmAddress);
+
 			// Fetch fresh timepoint from chain (source of truth)
 			const pending = await getPendingForCall(api, ms.ss58, entry.callHash);
 			if (!pending) {
-				setTxStatus("Error: pending entry no longer exists on-chain");
+				setTxStatus("Proposal already executed or cancelled — refreshing.");
 				await readPending();
+				await readStatuses();
 				return;
 			}
 			const timepoint: Timepoint = pending.when;
 
-			const calldata = encodeAuthorityCall(hint.action, hint.target);
-			const innerCall = buildReviveInnerTx(api, authorityAddr, calldata);
+			const innerCall = buildInnerCallForAction(api, hint.action, hint.target, authorityAddr);
 			const others = otherSignatoriesFor(ms.signatories, approver.address);
 
 			setTxStatus("Approving & executing…");
@@ -380,15 +396,54 @@ export default function GovernanceDashboard() {
 				timepoint,
 			);
 
-			removeHint(entry.callHash);
+			// Persist the guess as a hint so other sessions see it too
+			if (!entry.hint) saveHint(entry.callHash, { ...hint, proposedAt: Date.now() });
+			else removeHint(entry.callHash);
+
 			setTxStatus(
 				`Executed! ${actionLabel(hint.action)} for ${hint.target.slice(0, 10)}…  (tx: ${result.txHash.slice(0, 14)}…)`,
 			);
 			await new Promise((r) => setTimeout(r, 3000));
 			await readPending();
 			await readStatuses();
+
+			// Verify the inner call actually changed state. Pallet-multisig's "ok" only
+			// means threshold reached + dispatched; the dispatched Revive.call can still
+			// revert silently (multisig unmapped, not owner, addMedic require-fail).
+			const expectedChange = await verifyDispatchOutcome(hint, api);
+			if (expectedChange === "unchanged") {
+				const nowMapped = await isMapped(api, ms.h160 as `0x${string}`);
+				const why = !nowMapped
+					? "multisig H160 is not mapped in pallet-revive — propose Revive.map_account first"
+					: hint.action === "mapAccount"
+						? "Revive.map_account dispatch reverted inside as_multi"
+						: "inner call reverted (likely wrong owner, or the target already matched / never matched the require)";
+				setTxStatus(`Multisig executed but state didn't change: ${why}.`);
+			}
 		} catch (e) {
-			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+			if (isStaleProposalError(e)) {
+				// Re-query so we can tell race (entry gone) from mismatch (entry still there).
+				let stillPending = false;
+				try {
+					const client = getClient(wsUrl);
+					const descriptor = await getStackTemplateDescriptor();
+					const api = client.getTypedApi(descriptor);
+					stillPending = Boolean(await getPendingForCall(api, ms.ss58, entry.callHash));
+				} catch {
+					// fall back to mismatch message below if we couldn't re-query
+				}
+				if (!stillPending) {
+					setTxStatus("Proposal already executed or cancelled — refreshing.");
+				} else {
+					setTxStatus(
+						"Action or target doesn't match the proposed call. Check your inputs and try again.",
+					);
+				}
+				await readPending();
+				await readStatuses();
+			} else {
+				setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+			}
 		} finally {
 			setLoading(false);
 		}
@@ -440,13 +495,60 @@ export default function GovernanceDashboard() {
 				<h1 className="text-2xl font-bold text-text-primary font-display">Governance</h1>
 				<p className="text-text-secondary text-sm mt-1">
 					Manage medic authority via the {ms?.threshold ?? 2}-of-
-					{ms?.signatories.length ?? 3} multisig (
-					{(signatoryAccounts.length > 0 ? signatoryAccounts : accounts)
-						.map((a) => a.name)
-						.join(" · ")}
-					)
+					{ms?.signatories.length ?? 3} multisig
+					{signatoryAccounts.length > 0 &&
+						` (${signatoryAccounts.map((a) => a.name).join(" · ")} loaded in wallet)`}
 				</p>
 			</div>
+
+			{/* No signatory loaded warning */}
+			{ms && signatoryAccounts.length === 0 && (
+				<div className="card border-red-500/30 bg-red-500/5 space-y-2">
+					<p className="text-red-400 text-sm font-medium">
+						None of the multisig signatories are loaded in your wallet.
+					</p>
+					<p className="text-text-secondary text-xs">
+						Expected one of these SS58 accounts to be imported into Talisman /
+						Polkadot.js extension:
+					</p>
+					<ul className="text-text-tertiary text-xs font-mono space-y-0.5">
+						{ms.signatories.map((s) => (
+							<li key={s}>{s}</li>
+						))}
+					</ul>
+					<p className="text-text-secondary text-xs">
+						For Paseo, import <code>Council1.json</code>, <code>Council2.json</code>,{" "}
+						<code>Medic.json</code> keystores. For local, the deploy script reads the
+						same keystore files to derive the multisig.
+					</p>
+				</div>
+			)}
+
+			{/* Multisig not mapped warning — debug-only, deploy script should map it. */}
+			{showDebug && ms && multisigMapped === false && (
+				<div className="card border-yellow-500/30 bg-yellow-500/5 space-y-3">
+					<p className="text-yellow-400 text-sm">
+						Multisig H160 <code className="text-text-primary font-mono">{ms.h160}</code>{" "}
+						is not registered with pallet-revive. Any <code>Revive.call</code>{" "}
+						dispatched via <code>as_multi</code> will revert with{" "}
+						<b>"account unmapped"</b>. Fix: propose <code>Revive.map_account()</code>{" "}
+						through the multisig ({ms.threshold}
+						-of-{ms.signatories.length} approvals).
+					</p>
+					<button
+						className="btn-primary text-xs px-3 py-1.5"
+						onClick={() => proposeAction("mapAccount", NO_TARGET)}
+						disabled={loading || signatoryAccounts.length === 0}
+						title={
+							signatoryAccounts.length === 0
+								? "Import a multisig signatory keystore first"
+								: undefined
+						}
+					>
+						{loading ? "Submitting…" : "Propose Revive.map_account"}
+					</button>
+				</div>
+			)}
 
 			{/* Not deployed warning */}
 			{!authorityAddr && (
@@ -580,13 +682,11 @@ export default function GovernanceDashboard() {
 							value={proposerIdx}
 							onChange={(e) => setProposerIdx(Number(e.target.value))}
 						>
-							{(signatoryAccounts.length > 0 ? signatoryAccounts : accounts).map(
-								(acc, i) => (
-									<option key={acc.address} value={i}>
-										{acc.name} ({acc.evmAddress.slice(0, 8)}…)
-									</option>
-								),
-							)}
+							{signatoryAccounts.map((acc, i) => (
+								<option key={acc.address} value={i}>
+									{acc.name} ({acc.evmAddress.slice(0, 8)}…)
+								</option>
+							))}
 						</select>
 					</div>
 
@@ -596,7 +696,7 @@ export default function GovernanceDashboard() {
 						<select
 							className="input w-full"
 							value={actionMethod}
-							onChange={(e) => setActionMethod(e.target.value as AuthorityMethod)}
+							onChange={(e) => setActionMethod(e.target.value as GovernanceAction)}
 						>
 							<option value="addMedic">Add Medic</option>
 							<option value="removeMedic">Remove Medic</option>
@@ -632,8 +732,18 @@ export default function GovernanceDashboard() {
 
 				<button
 					className="btn-primary"
-					onClick={handlePropose}
-					disabled={loading || !authorityAddr || !ms}
+					onClick={() => {
+						const target = actionTarget.trim();
+						if (!/^0x[0-9a-fA-F]{40}$/.test(target))
+							return setTxStatus("Error: target must be a valid H160 address (0x…)");
+						proposeAction(actionMethod, target as `0x${string}`);
+					}}
+					disabled={loading || !authorityAddr || !ms || signatoryAccounts.length === 0}
+					title={
+						signatoryAccounts.length === 0
+							? "Import a multisig signatory keystore first"
+							: undefined
+					}
 				>
 					{loading ? "Submitting…" : "Propose"}
 				</button>
@@ -651,13 +761,11 @@ export default function GovernanceDashboard() {
 						value={approverIdx}
 						onChange={(e) => setApproverIdx(Number(e.target.value))}
 					>
-						{(signatoryAccounts.length > 0 ? signatoryAccounts : accounts).map(
-							(acc, i) => (
-								<option key={acc.address} value={i}>
-									{acc.name} ({acc.evmAddress.slice(0, 8)}…)
-								</option>
-							),
-						)}
+						{signatoryAccounts.map((acc, i) => (
+							<option key={acc.address} value={i}>
+								{acc.name} ({acc.evmAddress.slice(0, 8)}…)
+							</option>
+						))}
 					</select>
 				</div>
 
@@ -710,13 +818,10 @@ export default function GovernanceDashboard() {
 										disabled={
 											loading ||
 											(!entry.hint &&
-												getOverride(entry.callHash).hashOk !== true)
-										}
-										title={
-											!entry.hint &&
-											getOverride(entry.callHash).hashOk !== true
-												? "Verify hash first"
-												: undefined
+												getGuess(entry.callHash).action !== "mapAccount" &&
+												!/^0x[0-9a-fA-F]{40}$/.test(
+													getGuess(entry.callHash).target.trim(),
+												))
 										}
 									>
 										Approve & Execute
@@ -724,20 +829,20 @@ export default function GovernanceDashboard() {
 								</div>
 								{!entry.hint &&
 									(() => {
-										const ov = getOverride(entry.callHash);
+										const g = getGuess(entry.callHash);
 										return (
 											<div className="pt-1 space-y-2">
 												<p className="text-text-tertiary text-xs">
 													Enter the action and target that was proposed.
-													The hash must match before you can approve — the
-													chain rejects anything that doesn't.
+													If they don't match, the chain rejects the
+													approval and we'll tell you.
 												</p>
 												<div className="flex flex-wrap gap-2 items-end">
 													<select
 														className="input-field text-xs py-1 px-2"
-														value={ov.action}
+														value={g.action}
 														onChange={(e) =>
-															setOverrideField(
+															setGuessField(
 																entry.callHash,
 																"action",
 																e.target.value,
@@ -751,67 +856,42 @@ export default function GovernanceDashboard() {
 														<option value="transferOwnership">
 															Transfer Ownership
 														</option>
+														<option value="mapAccount">
+															Map Multisig
+														</option>
 													</select>
-													<input
-														className="input-field text-xs py-1 px-2 flex-1 min-w-[160px] font-mono"
-														placeholder="0x… target H160"
-														value={ov.target}
-														onChange={(e) =>
-															setOverrideField(
-																entry.callHash,
-																"target",
-																e.target.value,
-															)
-														}
-													/>
+													{g.action !== "mapAccount" && (
+														<input
+															className="input-field text-xs py-1 px-2 flex-1 min-w-[160px] font-mono"
+															placeholder="0x… target H160"
+															value={g.target}
+															onChange={(e) =>
+																setGuessField(
+																	entry.callHash,
+																	"target",
+																	e.target.value,
+																)
+															}
+														/>
+													)}
 													<div className="flex gap-1">
-														{accounts.map((a) => (
-															<button
-																key={a.evmAddress}
-																className="btn-outline text-xs px-2 py-1"
-																onClick={() =>
-																	setOverrideField(
-																		entry.callHash,
-																		"target",
-																		a.evmAddress,
-																	)
-																}
-															>
-																{a.name}
-															</button>
-														))}
+														{g.action !== "mapAccount" &&
+															accounts.map((a) => (
+																<button
+																	key={a.evmAddress}
+																	className="btn-outline text-xs px-2 py-1"
+																	onClick={() =>
+																		setGuessField(
+																			entry.callHash,
+																			"target",
+																			a.evmAddress,
+																		)
+																	}
+																>
+																	{a.name}
+																</button>
+															))}
 													</div>
-												</div>
-												<div className="flex items-center gap-2">
-													<button
-														className="btn-secondary text-xs px-2 py-1"
-														onClick={() =>
-															verifyOverrideHash(
-																entry.callHash,
-																ov.action,
-																ov.target,
-															)
-														}
-														disabled={
-															loading ||
-															!/^0x[0-9a-fA-F]{40}$/.test(
-																ov.target.trim(),
-															)
-														}
-													>
-														Verify hash
-													</button>
-													{ov.hashOk === true && (
-														<span className="text-accent-green text-xs font-medium">
-															✓ hash matches — safe to approve
-														</span>
-													)}
-													{ov.hashOk === false && (
-														<span className="text-accent-red text-xs">
-															✗ mismatch — wrong action or target
-															address
-														</span>
-													)}
 												</div>
 											</div>
 										);

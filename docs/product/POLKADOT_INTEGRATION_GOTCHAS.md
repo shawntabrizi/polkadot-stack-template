@@ -210,6 +210,16 @@ Fund the multisig account first (it needs balance to pay Revive + storage deposi
 mapping is permanent; you only do this once per multisig (or per account you want to use as a
 contract caller).
 
+**Dev accounts follow the same rule**: Alice / Bob / Charlie each need `Revive.map_account()`
+called once before the frontend can dispatch `Revive.call` as them from the dashboard.
+Otherwise `eth_getBalance` returns zero for their H160 (substrate balance is hidden behind
+the missing mapping), and any contract-side check against `msg.sender` sees a derivation
+that doesn't match. The zombienet in `start-all.sh` is ephemeral — every restart wipes the
+mapping. Since 2026-04-22, `contracts/pvm/scripts/set-deployments.ts::mapDevAccountsLocal`
+(invoked by step [6/9] of `start-all.sh`) handles this automatically for all three dev
+accounts; manually-run flows that skip set-deployments still need to map the accounts by
+hand.
+
 **Upstream improvement**:
 
 - pallet-revive could auto-map on first call from an unmapped AccountId (it already knows the
@@ -499,6 +509,251 @@ needs no knowledge of blake2 or SCALE.
 **Upstream improvement**: a pallet-revive host function that exposes `blake2_256(bytes)` 
 directly (not the F round) would make on-chain multisig address derivation trivial and unlock
 other substrate-native hash use cases.
+
+---
+
+### 15. `@novasamatech/sdk-statement` `getStatements()` — TDZ bug: `Cannot access 'unsubscribe' before initialization`
+
+**Layer**: @novasamatech/sdk-statement (`v0.6.0`)
+**Hit on**: 2026-04-22
+
+**Symptom**:
+```
+Error: Cannot access 'unsubscribe' before initialization
+```
+thrown from inside the Statement Store SDK when the researcher clicks **Decrypt & View**
+(or any other path that resolves a statement by hash via `fetchStatementByHash`). The error
+fires intermittently — warm caches / small statement counts make it more likely — and kills
+the decrypt flow before any data is returned.
+
+**Cause**: classic temporal-dead-zone bug in
+`node_modules/@novasamatech/sdk-statement/dist/statement-sdk.js:11`:
+
+```js
+const unsubscribe = api.subscribeStatement(
+  filter,
+  (event) => {
+    ...
+    if (event.data.remaining === 0) {
+      unsubscribe();   // ← TDZ if this runs before the const is assigned
+      resolve(statements);
+    }
+  },
+  (error) => { unsubscribe(); reject(error); },
+);
+```
+
+The node flushes its cached batch the moment the subscription is registered. On local +
+People chain with a small statement count, `onMessage` fires **synchronously during the
+subscribe call**, before the `const unsubscribe = ...` assignment completes — so the
+handler's `unsubscribe()` reference is still in TDZ and throws.
+
+**Fix / workaround**: don't use `createStatementSdk(...).getStatements(...)`.
+
+The first attempted fix — keeping `@novasamatech/statement-store`'s `createLazyClient` +
+`getSubscribeFn()` and only hoisting the unsubscribe ref — dodges the TDZ bug but surfaces a
+*different* failure: a `SyntaxError: "[object Object]" is not valid JSON` thrown from one of
+the many `JSON.parse` layers inside the polkadot-api WS stack (`raw-client`, `follow-enhancer`)
+when a notification payload doesn't match what they expect. The polkadot-api WS provider also
+opens an unwanted `chainHead_v1_follow` side-subscription that's pure overhead for a one-shot
+statement fetch.
+
+The robust approach is to drive the subscription over a **plain `WebSocket`**, JSON-encode
+requests by hand, and only decode batch payloads with the exported `statementCodec`. No
+substrate-client, no lazyClient, no ws-provider.
+
+**Status on master** (as of 2026-04-22, end of session):
+
+- **TDZ bug is fixed via postinstall patch**: `web/scripts/patch-sdk-statement.mjs` rewrites
+  `node_modules/@novasamatech/sdk-statement/dist/statement-sdk.js` at install time to hoist
+  the unsubscribe through a ref object. Wired into `web/package.json` postinstall alongside
+  `patch-papi-cli.mjs`. Sentinel-guarded (idempotent, fails loudly if upstream changes shape).
+- **`_sdkFetch` prefers `statement_dump`** (HTTP POST) when the node exposes it and falls
+  back to the patched SDK subscribe path otherwise — see entry #16 below for why this is
+  required. The SDK submission path (`_rawSubmit`) is unchanged; it still uses the template's
+  original `{proof, data}` 2-field shape, which works on local but gets silently dropped on
+  Paseo (see "Raw `statement_submit` shape" below).
+- **The raw-WebSocket submission rewrite remains parked** at
+  `docs/product/parked/statement-store-raw-submit.patch` + `WalletSelector.with-localSigner.tsx`.
+  It was verified to produce `{status: "ok"}` on Paseo for funded signers, but hits
+  `noAllowance` for unfunded burner keys and the project chose to keep the `@novasamatech/*`
+  library surface. The sketch below shows how that candidate looked:
+
+```ts
+import { statementCodec } from "@novasamatech/sdk-statement";
+
+const ws = new WebSocket(storeUrl);
+let subscriptionId: string | null = null;
+const collected: any[] = [];
+
+const decoded = await new Promise((resolve, reject) => {
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({
+      jsonrpc: "2.0", id: 1,
+      method: "statement_subscribeStatement", params: ["any"],
+    }));
+  });
+  ws.addEventListener("message", (ev) => {
+    if (typeof ev.data !== "string") return;
+    let parsed; try { parsed = JSON.parse(ev.data); } catch { return; }
+
+    if (parsed.id === 1) {
+      if (parsed.error) return reject(new Error(parsed.error.message));
+      if (typeof parsed.result === "string") subscriptionId = parsed.result;
+      return;
+    }
+    if (parsed.method === "statement_statements"
+        && parsed.params?.subscription === subscriptionId) {
+      const event = parsed.params.result;
+      if (event?.event !== "newStatements") return;
+      for (const enc of event.data?.statements ?? []) {
+        try { collected.push(statementCodec.dec(enc)); } catch {}
+      }
+      if (event.data?.remaining === 0 || event.data?.remaining === undefined) {
+        // unsubscribe via statement_unsubscribeStatement, then resolve(collected)
+      }
+    }
+  });
+  ws.addEventListener("error", () => reject(new Error("WS error")));
+  ws.addEventListener("close", () => resolve(collected));
+});
+```
+
+Works on both local nodes and People chain (Paseo).
+
+**Gotchas within the gotcha** (captured while building the parked implementation — anyone
+rebuilding it from scratch will hit the same walls):
+
+- **Method name is singular**: `statement_subscribeStatement` emits notifications under the
+  method name `statement_statement` (singular), not `statement_statements` (plural). The
+  adjacently-tagged event shape `{ event: "newStatements", data: { statements, remaining } }`
+  is correct. Verified against `wss://paseo-people-next-rpc.polkadot.io` on 2026-04-22: node
+  flushed all cached statements (950+) in a single batch with `remaining: 0`. Wrong method
+  name fails silently — handler never matches, promise hangs until timeout, UI stuck at
+  "Cache miss — re-fetching from Statement Store..." forever.
+- **Raw `statement_submit` shape**: histogram of 961 live statements on Paseo showed 920 with
+  `{channel, data, expiry, proof, topics}` and 41 with `{data, expiry, proof, topics}` —
+  **zero** with just `{proof, data}`. The node silently drops 2-field statements; you must
+  include at least `expiry` and `topics`. Build the statement via the exported `statementCodec`.
+- **Signature payload**: the runtime hashes `Statement::encoded(for_signing=true)` which is
+  the SCALE bytes of everything except the proof, **with the outer Vec compact-length prefix
+  stripped**. The SDK's `getStatementSigner` (`@novasamatech/sdk-statement/dist/signer.js:11`)
+  does `signFn(encoded.slice(compactLen))`. Skipping that slice yields `badProof` even when
+  the signature is cryptographically valid.
+- **Codec types**: `statementCodec.enc` expects **hex strings** (`0x…`) for the fixed-size
+  fields (`signature`, `signer`, each `topic`), `bigint` for `expiry`, `Uint8Array` for
+  `data`. Confirmed by round-tripping a live statement (`dec` → `enc` produced byte-identical
+  output). Passing `Uint8Array` for signature/signer silently produces garbage bytes with no
+  error from `enc`.
+- **Silent RPC rejection**: `statement_submit` returns HTTP 200 with
+  `{result: {status: "rejected", reason: "…"}}` when the runtime refuses the statement. The
+  old raw path only guarded on `result.error`, so rejections looked like successes — the
+  `fulfill` call then landed on-chain referencing bytes that never made it into the store.
+  Any new raw path must also throw on non-`ok` status.
+- **`noAllowance` is the wall** — the blocker that prompted the revert: submissions from an
+  in-browser burner sr25519 keypair (no on-chain balance, no identity) are rejected as
+  `{status: "rejected", reason: "noAllowance"}`. The statement store rate-limiter is priority-
+  based. Three realistic paths forward if/when this is revisited: (a) fund the burner's SS58
+  address on People chain once, (b) route through Nova Wallet Host (existing SDK path), or
+  (c) keep statements on a local dev node (allowance check typically permissive).
+
+**Upstream improvement**: one-line fix in `@novasamatech/sdk-statement` — hoist
+`let unsubscribe` above the `subscribe` call and assign, or wrap the assignment with a
+`queueMicrotask` so the handler can never see it in TDZ. File against
+`novasamatech/papi-sdks`. Also worth asking upstream for a helper that wraps the
+`sign + submit` flow correctly (stripping `compactLen`, serializing fixed-size fields as hex,
+surfacing rejection status).
+
+---
+
+### 16. Statement Store RPC asymmetry: `statement_dump` on local, `statement_subscribeStatement` on Paseo People chain
+
+**Layer**: pallet-statement-store runtime exposure
+**Hit on**: 2026-04-22
+
+**Symptom**: after fixing the TDZ bug from #15, decrypt on the local dev node throws
+`SyntaxError: "[object Object]" is not valid JSON` instead. Zero statements in the cache.
+The SDK's `getStatements` talks to `statement_subscribeStatement`, but the local node
+doesn't expose that RPC — the node returns a "method not found" error and the polkadot-api
+WS stack (raw-client + follow-enhancer) mangles it into the JSON parse error.
+
+**Cause**: the two runtimes expose different subsets of the `statement_*` RPC surface:
+
+- **Local template (zombienet)**: `statement_broadcasts`, `statement_broadcastsStatement`,
+  `statement_dump`, `statement_posted`, `statement_postedClear`, `statement_postedClearStatement`,
+  `statement_postedStatement`, `statement_remove`, `statement_submit`.
+  **No `statement_subscribeStatement`.**
+- **Paseo People chain**: `statement_submit` + `statement_subscribeStatement`.
+  **No `statement_dump`.**
+
+Confirmed 2026-04-22 via `rpc_methods` against both. The `@novasamatech/sdk-statement`
+SDK only implements the subscribe path — so it works on Paseo and breaks on local, and
+the template's original Univerify-baseline `useStatementStore.ts` (which only used
+`statement_dump`) worked on local and wouldn't have worked on Paseo.
+
+**Fix / workaround**: `web/src/hooks/useStatementStore.ts::_sdkFetch` now tries
+`statement_dump` first (HTTP POST) and falls back to the SDK's patched subscribe path:
+
+```ts
+const dumped = await _tryDump(storeUrl);
+if (dumped !== null) return dumped;
+// fall through to createStatementSdk(...).getStatements(...) — patched for TDZ
+```
+
+Statements dumped via `statement_dump` are decoded with the same `statementCodec.dec` the
+SDK uses internally; hash computation (`blake2b(data, 32)`) is identical on both paths, so
+the cache format is unchanged.
+
+**Upstream improvement**: ask Parity to include `statement_dump` in the People chain runtime
+(cheap RPC, already implemented in the pallet), or ship `statement_subscribeStatement` in
+the template runtime. Either one would eliminate the need for the fallback branch.
+
+---
+
+### 17. Patching `node_modules/*` doesn't invalidate Vite's `.vite/deps/` pre-bundle
+
+**Layer**: Vite dev server (tested with Vite 6.x)
+**Hit on**: 2026-04-22
+
+**Symptom**: you write a postinstall script that patches a file inside
+`node_modules/<pkg>/dist/...` (e.g. `patch-sdk-statement.mjs` from #15). You verify the
+on-disk file has the patch. You reload the app. **The patch doesn't take effect** — the
+browser still sees the old behavior. A `grep` inside the patched file finds the fix; a
+`grep` inside `node_modules/.vite/deps/<pkg>.js` does not.
+
+**Cause**: Vite pre-bundles optimized deps (ESM-friendly wrappers + esbuild-consolidated
+chunks) into `node_modules/.vite/deps/` at dev-server startup. Once built, those artifacts
+are served from disk until the dependency graph changes — and a `postinstall` mutation
+inside the same `node_modules/<pkg>` does **not** invalidate that cache (the package
+version in `package.json` hasn't changed, and Vite doesn't checksum transitive source files).
+
+**Fix / workaround**:
+
+- After changing a file inside `node_modules/`, restart Vite with `--force`:
+  ```bash
+  # kill the existing vite, then
+  npx vite --host --port 5174 --force
+  ```
+- Or delete the pre-bundle and let Vite rebuild it on next page-load:
+  ```bash
+  rm -f node_modules/.vite/deps/<pkg>_<name>.js*
+  rm -f node_modules/.vite/deps/_metadata.json
+  ```
+- **In CI / fresh clones**: postinstall runs before the first `vite dev`, so the first
+  pre-bundle already contains the patched source — no extra step needed.
+
+**Verification trick**: put a sentinel comment in your patch (e.g. `/* patched:xyz */`) and
+check if it made it into the chunk file, not the raw source:
+
+```bash
+# esbuild strips block comments but keeps function structure;
+# search for your new pattern instead
+grep -l "ref\.unsubscribe" node_modules/.vite/deps/chunk-*.js
+```
+
+**Upstream improvement**: Vite could hash source files under known-patched paths (or let
+users register paths to invalidate). Until then, document the `--force` requirement for
+anyone adding postinstall patches.
 
 ---
 

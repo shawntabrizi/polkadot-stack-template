@@ -13,7 +13,7 @@
     "dev": "vite --host",
     "dev:blockchain": "npm run update-types && vite",
     "build": "npm run codegen && tsc -b && vite build",
-    "postinstall": "node scripts/patch-papi-cli.mjs && npm run codegen",
+    "postinstall": "node scripts/patch-papi-cli.mjs && node scripts/patch-sdk-statement.mjs && npm run codegen",
     "lint": "eslint .",
     "fmt": "prettier --write 'src/**/*.{ts,tsx}'",
     "fmt:check": "prettier --check 'src/**/*.{ts,tsx}'",
