@@ -12,19 +12,19 @@ export const deployments: Record<NetworkPreset, NetworkDeployment> = {
 		medicalMarket: "0xc01ee7f10ea4af4673cfff62710e1d7792aba8f3",
 		medicAuthority: "0x970951a12f975e6762482aca81e57d5a2a4e73f4",
 		multisig: {
-			ss58: "5Drae25fn2KwZKuST7LCvB7D4rdyqFoMAdSD4CEdQPuQr2Lk",
-			h160: "0x1597f37473220526382eb1a190a4fd97e7270648",
+			ss58: "5HQNAsn1bx9GnCY9aqM7syUH4He1nX2VR2gCyqj3PFmFCmqZ",
+			h160: "0xd9122bd9ceb311d1559cc9bd33f1df72a8b8fd91",
 			threshold: 2,
 			signatories: [
-				"5Doa63xYuFXQaWkM5decEj7cgrr5eCcP5YbN4faTHvWdRdQs",
-				"5HaLFkCjJyuUSnyoPKYukWksCKvy489QmiTKCiJUxoorpHvq",
-				"5Hp3SxTNMvussku1zRRaFwn7waW4uHdhJUF61st9EZzXb8wd",
+				"5CQ1faJPWoc6AG2QdJq3d38vmGc7raGGmr8kLB6wLwW4LT7h",
+				"5D8A5CGToab25BrwDN2AbrQz8znyQtK1WfDyZJeoq5ebA4fU",
+				"5GpFurRUrA9sU9td3GX3wLdoyhD6jTSAgkLHELtpCFByD21u",
 			],
 		},
 	},
 	paseo: {
-		medicalMarket: "0x66c22edbede1e0010ebf86851537203aa9f84a53",
-		medicAuthority: "0xca522f480f242af9c15d28b5d3112e7aad8f8786",
+		medicalMarket: "0xf9bdefc23b6dc2a71a8a97d43ebb45e0c86a1ef9",
+		medicAuthority: "0x0c21366490d98141f04c00c31456aca803db758f",
 		multisig: {
 			ss58: "5HQNAsn1bx9GnCY9aqM7syUH4He1nX2VR2gCyqj3PFmFCmqZ",
 			h160: "0xd9122bd9ceb311d1559cc9bd33f1df72a8b8fd91",

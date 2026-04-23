@@ -217,11 +217,12 @@ export default function ShareWithDoctor() {
 		setPackageParseError(null);
 		try {
 			const json: unknown = JSON.parse(new TextDecoder().decode(bytes));
+			const version = (json as Record<string, unknown>).version;
 			if (
 				typeof json === "object" &&
 				json !== null &&
 				"version" in json &&
-				(json as Record<string, unknown>).version === "v3-record" &&
+				(version === "v3-record" || version === "v4-record") &&
 				"header" in json &&
 				"body" in json &&
 				"headerCommit" in json &&
@@ -233,7 +234,7 @@ export default function ShareWithDoctor() {
 			} else {
 				setImportedPackage(null);
 				setPackageParseError(
-					"Not a valid v3 signed record. Use the Medic Signing Tool to produce one.",
+					"Not a valid v3 or v4 signed record. Use the Medic Signing Tool to produce one.",
 				);
 			}
 		} catch {
@@ -286,11 +287,12 @@ export default function ShareWithDoctor() {
 					bigint,
 					bigint,
 					bigint,
+					bigint,
 					string,
 					boolean,
 				];
-				const medicPkX = result[2];
-				const medicPkY = result[3];
+				const medicPkX = result[3];
+				const medicPkY = result[4];
 				const key = medicPkX.toString();
 				if (seen.has(key)) continue;
 
@@ -420,6 +422,7 @@ export default function ShareWithDoctor() {
 				headerInput,
 				BigInt(importedPackage.headerCommit),
 				BigInt(importedPackage.bodyCommit),
+				BigInt(importedPackage.piiCommit ?? "0"),
 				BigInt(importedPackage.medicPublicKey.x),
 				BigInt(importedPackage.medicPublicKey.y),
 				BigInt(importedPackage.signature.R8x),

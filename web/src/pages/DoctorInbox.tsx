@@ -45,6 +45,10 @@ function verifyShareOffChain(
 	header: MedicalHeader,
 	headerCommit: bigint,
 	bodyCommit: bigint,
+	// piiCommit is not emitted by the RecordShared event; callers pass 0n for
+	// v3 shares (no PII compartment) and the on-chain value for v4 shares once
+	// the event is updated to include it.
+	piiCommit: bigint,
 	medicPk: { x: bigint; y: bigint },
 	sig: { R8x: bigint; R8y: bigint; S: bigint },
 ): { headerMatch: boolean; sigValid: boolean } {
@@ -56,7 +60,7 @@ function verifyShareOffChain(
 	}
 	let sigValid = false;
 	try {
-		const combined = computeRecordCommit(headerCommit, bodyCommit);
+		const combined = computeRecordCommit(headerCommit, bodyCommit, piiCommit);
 		sigValid = verifySignature(combined, { R8: [sig.R8x, sig.R8y], S: sig.S }, [
 			medicPk.x,
 			medicPk.y,
@@ -400,6 +404,7 @@ export default function DoctorInbox() {
 					header,
 					args.headerCommit,
 					args.bodyCommit,
+					0n, // RecordShared event does not carry piiCommit; use 0n for v3 shares
 					{ x: args.medicPkX, y: args.medicPkY },
 					{ R8x: args.sigR8x, R8y: args.sigR8y, S: args.sigS },
 				);

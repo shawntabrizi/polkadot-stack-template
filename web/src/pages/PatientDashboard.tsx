@@ -21,6 +21,7 @@ interface Listing {
 	header: MedicalHeader;
 	headerCommit: bigint;
 	bodyCommit: bigint;
+	piiCommit: bigint;
 	medicPkX: bigint;
 	medicPkY: bigint;
 	sigR8x: bigint;
@@ -58,9 +59,9 @@ export default function PatientDashboard() {
 	const accounts = useChainStore((s) => s.accounts);
 	const selectedAccountIndex = useChainStore((s) => s.selectedAccountIndex);
 	const [contractAddress, setContractAddress] = useState("");
-	const [fileBytes, setFileBytes] = useState<Uint8Array | null>(null);
 	const [importedPackage, setImportedPackage] = useState<SignedRecord | null>(null);
 	const [packageParseError, setPackageParseError] = useState<string | null>(null);
+	const [pasteText, setPasteText] = useState("");
 	const [statementStoreAvailable, setStatementStoreAvailable] = useState<boolean | null>(null);
 	const [priceStr, setPriceStr] = useState("");
 	const [listings, setListings] = useState<Listing[]>([]);
@@ -86,20 +87,20 @@ export default function PatientDashboard() {
 		}
 	}
 
-	const onFileBytes = useCallback((bytes: Uint8Array) => {
-		setFileBytes(bytes);
+	function parseSignedRecordText(text: string) {
 		setPackageParseError(null);
 		try {
-			const json: unknown = JSON.parse(new TextDecoder().decode(bytes));
+			const json: unknown = JSON.parse(text);
 			if (
 				typeof json === "object" &&
 				json !== null &&
 				"version" in json &&
-				(json as Record<string, unknown>).version === "v3-record" &&
+				(json as Record<string, unknown>).version === "v4-record" &&
 				"header" in json &&
 				"body" in json &&
 				"headerCommit" in json &&
 				"bodyCommit" in json &&
+				"piiCommit" in json &&
 				"recordCommit" in json &&
 				"signature" in json
 			) {
@@ -107,13 +108,18 @@ export default function PatientDashboard() {
 			} else {
 				setImportedPackage(null);
 				setPackageParseError(
-					"Not a valid v3 signed record. Use the Medic Signing Tool to produce one.",
+					"Not a valid v4 signed record. Use the Medic Signing Tool to produce one.",
 				);
 			}
 		} catch {
 			setImportedPackage(null);
-			setPackageParseError("Could not parse file as JSON.");
+			setPackageParseError("Could not parse as JSON.");
 		}
+	}
+
+	const onFileBytes = useCallback((bytes: Uint8Array) => {
+		setPasteText("");
+		parseSignedRecordText(new TextDecoder().decode(bytes));
 	}, []);
 
 	const currentAccount = accounts[selectedAccountIndex] ?? accounts[0];
@@ -173,7 +179,7 @@ export default function PatientDashboard() {
 
 			const result: Listing[] = [];
 			for (let i = 0n; i < count; i++) {
-				// getListing returns: headerCommit, bodyCommit, medicPkX, medicPkY,
+				// getListing returns: headerCommit, bodyCommit, piiCommit, medicPkX, medicPkY,
 				//                     sigR8x, sigR8y, sigS, price, patient, active
 				const rawTuple = (await client.readContract({
 					address: addr,
@@ -189,6 +195,7 @@ export default function PatientDashboard() {
 					bigint,
 					bigint,
 					bigint,
+					bigint,
 					string,
 					boolean,
 				];
@@ -196,6 +203,7 @@ export default function PatientDashboard() {
 				const [
 					headerCommit,
 					bodyCommit,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -234,6 +242,7 @@ export default function PatientDashboard() {
 					header,
 					headerCommit,
 					bodyCommit,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -258,8 +267,8 @@ export default function PatientDashboard() {
 			setTxStatus("Error: Enter a contract address first");
 			return;
 		}
-		if (!fileBytes || !importedPackage) {
-			setTxStatus("Error: Drop a medic-signed record first");
+		if (!importedPackage) {
+			setTxStatus("Error: Load a medic-signed record first");
 			return;
 		}
 		if (!priceStr || isNaN(Number(priceStr)) || Number(priceStr) <= 0) {
@@ -273,6 +282,7 @@ export default function PatientDashboard() {
 			setTxStatus("Creating listing on-chain...");
 			const headerCommit = BigInt(importedPackage.headerCommit);
 			const bodyCommit = BigInt(importedPackage.bodyCommit);
+			const piiCommit = BigInt(importedPackage.piiCommit);
 			const medicPkX = BigInt(importedPackage.medicPublicKey.x);
 			const medicPkY = BigInt(importedPackage.medicPublicKey.y);
 			const sigR8x = BigInt(importedPackage.signature.R8x);
@@ -289,6 +299,7 @@ export default function PatientDashboard() {
 				headerInput,
 				headerCommit,
 				bodyCommit,
+				piiCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
@@ -311,8 +322,8 @@ export default function PatientDashboard() {
 			);
 
 			setTxStatus("Listing created! Come back here when a researcher places a buy order.");
-			setFileBytes(null);
 			setImportedPackage(null);
+			setPasteText("");
 			setPriceStr("");
 			loadListings();
 		} catch (e) {
@@ -462,10 +473,9 @@ export default function PatientDashboard() {
 			<div className="card space-y-4">
 				<h2 className="section-title">Create Listing</h2>
 				<p className="text-text-muted text-xs">
-					Drop a v3 medic-signed record (downloaded from the Medic Signing Tool). Title,
-					record type, date, and facility come from the medic-signed header and go
-					on-chain as-is. The encrypted body is uploaded at fulfillment — nothing is
-					uploaded now.
+					Drop a v4 medic-signed record, or paste the JSON copied from the Medic Signing
+					Tool. Header goes on-chain as-is; encrypted body is uploaded at fulfillment —
+					nothing is uploaded now.
 				</p>
 
 				<FileDropZone
@@ -479,6 +489,25 @@ export default function PatientDashboard() {
 					onStatementStoreToggle={() => {}}
 					statementStoreDisabled={statementStoreAvailable === false}
 				/>
+
+				<div className="space-y-1">
+					<label className="label">Or paste JSON</label>
+					<textarea
+						className="input-field w-full font-mono text-xs h-24 resize-y"
+						placeholder='{ "version": "v4-record", … }'
+						value={pasteText}
+						onChange={(e) => {
+							const text = e.target.value;
+							setPasteText(text);
+							if (text.trim()) {
+								parseSignedRecordText(text.trim());
+							} else {
+								setImportedPackage(null);
+								setPackageParseError(null);
+							}
+						}}
+					/>
+				</div>
 
 				{packageParseError && (
 					<p className="text-accent-red text-xs">{packageParseError}</p>
@@ -517,7 +546,7 @@ export default function PatientDashboard() {
 					/>
 				</div>
 
-				{importedPackage && fileBytes && (
+				{importedPackage && (
 					<button
 						onClick={createListing}
 						disabled={loading}

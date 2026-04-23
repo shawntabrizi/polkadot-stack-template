@@ -536,3 +536,196 @@ referenced or extracted if needed.
   moves off-chain into the buyer's decrypt panel. Phase 5.3 escrow
   becomes the planned recourse for patient fraud. Phase 5.1 artifacts
   retained as archive.
+
+---
+
+# Phase 5.3 — Trustless Fulfillment Without On-Chain ZK
+
+> **Status:** design decided 2026-04-23. Not yet implemented.
+
+## Problem statement
+
+Phase 5.2 `fulfill()` releases payment immediately with no on-chain
+guarantee that:
+
+1. The ciphertext in the Statement Store was encrypted for the buyer's key.
+2. The ciphertext decrypts to data matching `recordCommit`.
+3. The ciphertext exists in the Statement Store at all.
+
+A malicious patient can call `fulfill()` with a fake `ciphertextHash`
+that has no corresponding data, or encrypt garbage for a random key —
+in both cases payment releases and the buyer has no recourse.
+
+## Three-mechanism design
+
+All operations use **BabyJubJub scalar multiplications + Poseidon only**
+— no BN254 pairing. The expensive dispute path only executes in
+adversarial cases.
+
+### Mechanism 1 — Two-layer encryption at listing creation
+
+Instead of encrypting for the buyer at fulfillment time, the patient
+encrypts the plaintext with a random symmetric key `K` at listing
+creation:
+
+```
+C = PoseidonStreamCipher(K, plaintext)
+```
+
+The patient uploads `C` to the Statement Store and calls
+`createListing(…, ciphertextHash, H(K))` where:
+
+- `ciphertextHash = Poseidon(C)` — committed on-chain
+- `H(K) = Poseidon(K)` — key commitment on-chain
+
+**Before placing a buy order**, the researcher fetches `C` from the
+Statement Store and verifies `Poseidon(C) == ciphertextHash` locally.
+If nothing is there, or the hash mismatches, they do not buy. No
+on-chain action needed — the buyer simply walks away.
+
+This closes the "nothing in Statement Store" and "garbage ciphertext"
+attacks at zero on-chain cost: the buyer verifies existence off-chain
+before committing any funds.
+
+### Mechanism 2 — DLEQ proof in `fulfill()`
+
+At fulfillment the patient wraps `K` for the buyer's BabyJubJub key
+via ECDH:
+
+```
+sharedSecret = ephSk · buyerPk
+K_enc = K XOR Poseidon(sharedSecret.x, sharedSecret.y)
+```
+
+The patient also generates a **DLEQ (Discrete Log Equality) proof** —
+a Schnorr-style proof that the same `ephSk` was used to derive both
+`ephPk = ephSk·G` and the ECDH shared secret `ephSk·buyerPk`:
+
+```
+prove: log_G(ephPk) == log_buyerPk(sharedSecret)
+```
+
+The contract verifies the DLEQ proof inside `fulfill()` and rejects the
+call if it fails. Cost: ~3 BabyJubJub scalar multiplications — cheap
+enough for the happy path.
+
+This closes the "K_enc encrypted for wrong key" attack: the contract
+guarantees the wrap was done for the registered `buyerPk`.
+
+### Mechanism 3 — On-chain dispute
+
+After `fulfill()` the buyer decrypts `K_enc → K'` using their `skBuyer`.
+If something is wrong, they call `dispute()`. Two paths:
+
+**Wrong K (cheap path):**
+
+```
+dispute(K')
+```
+
+Contract checks `Poseidon(K') != H(K)`. One Poseidon call. If true →
+refund buyer.
+
+**Wrong plaintext (full path):**
+
+```
+dispute(K, C)
+```
+
+Contract verifies:
+1. `Poseidon(K) == H(K)` — K is the real key (on-chain commitment)
+2. `Poseidon(C) == ciphertextHash` — C is the real ciphertext
+3. `Poseidon(PoseidonStreamCipher(K, C)) != recordCommit` — plaintext
+   doesn't match the medic-signed commitment
+
+If all three pass → refund buyer. Cost: ~32 Poseidon calls for the
+stream cipher decryption + 2 hash checks. Expensive but only executes
+when the patient actually cheated.
+
+**False dispute protection:** if the buyer disputes with valid data
+(plaintext does match `recordCommit`), step 3 fails and the dispute is
+rejected. Patient keeps payment.
+
+### Timeout behaviour
+
+Payment is held in escrow after `fulfill()` for N blocks. Timeout fires
+→ payment goes to the **patient**, not the buyer.
+
+This is safe because:
+- `C` was uploaded at listing time and verified by the buyer before buying
+- `K` is revealed on-chain at `fulfill()` time
+- The buyer always has both `C` and `K` and can always form a dispute
+
+A buyer who receives correct data and simply ignores the dispute window
+loses nothing — they have the data, and timeout releases to the patient
+who delivered honestly. A buyer who tries to get free data by not
+acknowledging is still committed to the payment (timeout fires).
+
+## Full attack matrix
+
+| Attack | Closed by | On-chain cost |
+|---|---|---|
+| Nothing in Statement Store | Buyer verifies off-chain before buying | Free |
+| Garbage C (hash mismatch) | Buyer checks `Poseidon(C) == ciphertextHash` | Free |
+| `K_enc` wrapped for wrong key | DLEQ proof rejected in `fulfill()` | ~3 BJJ scalar mults |
+| Wrong K in `K_enc` | Cheap dispute: `Poseidon(K') != H(K)` | 1 Poseidon call |
+| Wrong plaintext in C | Full dispute: on-chain StreamCipher + hash | ~32 Poseidon calls |
+| Buyer free-rider (get data, skip ack) | Timeout → payment to patient | O(1) |
+| Buyer false dispute (data was correct) | Contract decrypts, finds match → rejected | ~32 Poseidon calls |
+
+## Known tradeoff — K is per-listing, not per-buyer
+
+`C` is encrypted once at listing creation with a single `K`. Every
+buyer of the same listing receives the same `K` wrapped in their own
+ECDH envelope. If one buyer reveals `K` publicly, any past buyer can
+re-decrypt `C` from the Statement Store.
+
+Mitigation: per-listing `K` is acceptable for MVP because:
+- Each buyer receives `K` only after paying; the incentive to expose `K`
+  (destroying their own privacy) is low.
+- `buyerPk` is on-chain — any public reveal of `K` is traceable to the
+  buyer who disclosed it, creating reputational risk.
+
+Per-buyer ciphertext (the Phase 5.2 ECDH scheme) offers stronger
+isolation but breaks the "buyer verifies before committing" property
+of Mechanism 1. Per-buyer encryption is the right default if listings
+are expected to have many buyers; per-listing `K` is fine for the
+low-volume MVP.
+
+## Contract changes required
+
+```solidity
+// createListing — add key commitment
+createListing(recordCommit, medicPk, sig, title, price,
+              ciphertextHash, bytes32 kCommit)
+
+// fulfill — add DLEQ proof + key wrap
+fulfill(orderId, ephPkX, ephPkY, bytes32 kEnc,
+        uint256[4] calldata dleqProof)
+
+// dispute paths
+disputeWrongKey(uint256 orderId, bytes32 kPrime)
+disputeWrongPlaintext(uint256 orderId, bytes32 k, bytes calldata ciphertext)
+
+// acknowledge (happy path — optional speedup)
+acknowledge(uint256 orderId)
+```
+
+## Solidity library dependencies
+
+- **BabyJubJub scalar multiplication** — exists in the Semaphore v4
+  contracts (`@semaphore-protocol/contracts`), already a project
+  dependency.
+- **Poseidon hash** — `poseidon-lite` covers the JS side; for Solidity
+  use the Poseidon factory from `@semaphore-protocol/contracts`.
+- **DLEQ verifier** — ~30 lines of Solidity using the BabyJubJub
+  primitives above; no external dependency needed.
+
+## Decision record (Phase 5.3)
+
+- **2026-04-23**: Design settled. Three-mechanism approach (listing-time
+  upload + DLEQ in fulfill + on-chain dispute) chosen over calldata-based
+  ciphertext submission because it avoids ~1 KB extra calldata on every
+  fulfillment and lets buyers verify availability before committing funds.
+  Per-listing symmetric key accepted as a known tradeoff for MVP.
+  Implementation deferred until Phase 5.2 frontend is stable.

@@ -1,0 +1,26 @@
+{
+  "header": {
+    "title": "Complete Blood Count (Apr 2026)",
+    "recordType": "CBC",
+    "recordedAt": 1745452800,
+    "facility": "Clínica San Rafael — Buenos Aires"
+  },
+  "pii": {
+    "patientId": "PAT-2024-0047",
+    "dateOfBirth": "1982-03-15"
+  },
+  "body": {
+    "bloodType": "A+",
+    "bmi": "28.3",
+    "cholesterol": "195",
+    "condition": "type2_diabetes",
+    "country": "FI",
+    "diagnosedAt": "2019-06-01",
+    "diastolicBP": "82",
+    "hba1c": "7.4",
+    "medicationInsulin": "false",
+    "medicationMetformin": "true",
+    "smoker": "false",
+    "systolicBP": "128"
+  }
+}

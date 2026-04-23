@@ -1,4 +1,4 @@
-import { poseidon2, poseidon4, poseidon8, poseidon16 } from "poseidon-lite";
+import { poseidon2, poseidon3, poseidon4, poseidon8, poseidon16 } from "poseidon-lite";
 import { mulPointEscalar, Base8, order as jubOrder } from "@zk-kit/baby-jubjub";
 
 const BN254_R = BigInt(
@@ -13,6 +13,8 @@ export const MAX_PAYLOAD_BYTES = (MAX_FIELDS - 1) * BYTES_PER_SLOT; // 961
 export const HEADER_FIELDS = 8;
 export const HEADER_MAX_PAYLOAD_BYTES = (HEADER_FIELDS - 1) * BYTES_PER_SLOT; // 217
 
+export const PII_FIELDS = 8;
+
 const RS = 0x1e;
 const US = 0x1f;
 
@@ -23,13 +25,20 @@ export interface MedicalHeader {
 	facility: string;
 }
 
+export interface MedicalPii {
+	patientId: string;
+	dateOfBirth: string;
+}
+
 export interface SignedRecord {
-	version: "v3-record";
+	version: "v4-record";
 	header: MedicalHeader;
+	pii: MedicalPii;
 	body: string[]; // plaintext body as stringified bigints (length MAX_FIELDS)
 	headerCommit: string;
 	bodyCommit: string;
-	recordCommit: string; // Poseidon2(headerCommit, bodyCommit) — what the medic signs
+	piiCommit: string;
+	recordCommit: string; // Poseidon3(headerCommit, bodyCommit, piiCommit) — what the medic signs
 	signature: { R8x: string; R8y: string; S: string };
 	medicPublicKey: { x: string; y: string };
 	signedAt: string;
@@ -95,8 +104,14 @@ function encodeFieldsFixed(
 	return plaintext;
 }
 
+const PII_KEYS: ReadonlySet<string> = new Set(["patientId", "dateOfBirth"]);
+
 export function encodeRecordToFieldElements(fields: Record<string, string>): bigint[] {
-	return encodeFieldsFixed(fields, MAX_FIELDS, MAX_PAYLOAD_BYTES);
+	const clinical: Record<string, string> = {};
+	for (const [k, v] of Object.entries(fields)) {
+		if (!PII_KEYS.has(k)) clinical[k] = v;
+	}
+	return encodeFieldsFixed(clinical, MAX_FIELDS, MAX_PAYLOAD_BYTES);
 }
 
 function headerToFields(header: MedicalHeader): Record<string, string> {
@@ -110,6 +125,21 @@ function headerToFields(header: MedicalHeader): Record<string, string> {
 
 export function encodeHeaderToFieldElements(header: MedicalHeader): bigint[] {
 	return encodeFieldsFixed(headerToFields(header), HEADER_FIELDS, HEADER_MAX_PAYLOAD_BYTES);
+}
+
+function piiToFields(pii: MedicalPii): Record<string, string> {
+	return {
+		dateOfBirth: pii.dateOfBirth,
+		patientId: pii.patientId,
+	};
+}
+
+export function encodePiiToFieldElements(pii: MedicalPii): bigint[] {
+	return encodeFieldsFixed(piiToFields(pii), PII_FIELDS, HEADER_MAX_PAYLOAD_BYTES);
+}
+
+export function computePiiCommit(pii: MedicalPii): bigint {
+	return poseidon8(encodePiiToFieldElements(pii));
 }
 
 export function decodeRecordFromFieldElements(plaintext: bigint[]): Record<string, string> {
@@ -163,8 +193,12 @@ export function computeHeaderCommit(header: MedicalHeader): bigint {
 	return hashChain8(encodeHeaderToFieldElements(header));
 }
 
-export function computeRecordCommit(headerCommit: bigint, bodyCommit: bigint): bigint {
-	return poseidon2([headerCommit, bodyCommit]);
+export function computeRecordCommit(
+	headerCommit: bigint,
+	bodyCommit: bigint,
+	piiCommit: bigint,
+): bigint {
+	return poseidon3([headerCommit, bodyCommit, piiCommit]);
 }
 
 export function randomScalar(): bigint {

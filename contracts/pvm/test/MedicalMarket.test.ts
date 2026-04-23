@@ -1,7 +1,7 @@
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
 import { expect } from "chai";
 import hre from "hardhat";
-import { poseidon2, poseidon4, poseidon8, poseidon16 } from "poseidon-lite";
+import { poseidon2, poseidon3, poseidon4, poseidon8, poseidon16 } from "poseidon-lite";
 import { mulPointEscalar, Base8, order as jubOrder } from "@zk-kit/baby-jubjub";
 
 // Phase 5.2 — record split into a public medic-signed header and an encrypted
@@ -73,6 +73,16 @@ function encodeHeader(header: Header): bigint[] {
 			recordType: header.recordType,
 			recordedAt: String(header.recordedAt),
 			facility: header.facility,
+		},
+		HEADER_N,
+	);
+}
+
+function encodePii(pii: { patientId: string; dateOfBirth: string }): bigint[] {
+	return encodeFieldsFixed(
+		{
+			patientId: pii.patientId,
+			dateOfBirth: pii.dateOfBirth,
 		},
 		HEADER_N,
 	);
@@ -170,7 +180,6 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 	};
 	const price = 1_000_000n;
 	const exampleRecord: Record<string, string> = {
-		patientId: "PAT-2024-0047",
 		bloodType: "A+",
 		hba1c: "7.4",
 		country: "FI",
@@ -178,9 +187,12 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 	const plaintext = encodeBody(exampleRecord);
 	const bodyCommit = hashChain32(plaintext);
 	const headerCommit = hashChain8(encodeHeader(header));
+	const piiCommit = poseidon8(
+		encodePii({ patientId: "PAT-2024-0047", dateOfBirth: "1982-03-15" }),
+	);
 	// recordCommit is what the medic signs off-chain (verified in the UI).
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	const _recordCommitForSigning = poseidon2([headerCommit, bodyCommit]);
+	const _recordCommitForSigning = poseidon3([headerCommit, bodyCommit, piiCommit]);
 	// Dummy non-zero medic sig values — the contract only enforces non-zero,
 	// not signature validity. Real signatures are produced by MedicSign.tsx
 	// using @zk-kit/eddsa-poseidon and verified off-chain by the buyer.
@@ -211,6 +223,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				headerTuple(header),
 				headerCommit,
 				bodyCommit,
+				piiCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
@@ -254,9 +267,10 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		const listing = await market.read.getListing([0n]);
 		expect(listing[0]).to.equal(headerCommit);
 		expect(listing[1]).to.equal(bodyCommit);
-		expect(listing[2]).to.equal(medicPkX);
-		expect(listing[3]).to.equal(medicPkY);
-		expect(listing[9]).to.equal(false); // active flipped off
+		expect(listing[2]).to.equal(piiCommit);
+		expect(listing[3]).to.equal(medicPkX);
+		expect(listing[4]).to.equal(medicPkY);
+		expect(listing[10]).to.equal(false); // active flipped off
 
 		const onchainHeader = await market.read.getListingHeader([0n]);
 		expect(onchainHeader[0]).to.equal(header.title);
@@ -308,7 +322,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 	it("headerCommit recomputed from on-chain fields matches the listing", async function () {
 		// This is the pre-purchase UI check: buyer reads header fields from chain,
 		// recomputes Poseidon(headerFields), compares to listing.headerCommit, and
-		// only then verifies the medic sig over Poseidon2(headerCommit, bodyCommit).
+		// only then verifies the medic sig over Poseidon3(headerCommit, bodyCommit, piiCommit).
 		const { market } = await loadFixture(deployWithOrder);
 		const listing = await market.read.getListing([0n]);
 		const onchainHeader = await market.read.getListingHeader([0n]);
@@ -331,6 +345,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					headerTuple({ ...header, title: "" }),
 					headerCommit,
 					bodyCommit,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -354,6 +369,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					headerTuple({ ...header, recordType: "" }),
 					headerCommit,
 					bodyCommit,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -377,6 +393,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					headerTuple(header),
 					0n,
 					bodyCommit,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -396,6 +413,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					headerTuple(header),
 					headerCommit,
 					0n,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -490,6 +508,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				headerTuple(header),
 				headerCommit,
 				bodyCommit,
+				piiCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
@@ -530,6 +549,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				headerTuple(header),
 				headerCommit,
 				bodyCommit,
+				piiCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
@@ -573,11 +593,19 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 
 		expect(await market.read.getPendingOrderId([0n])).to.equal(2n); // orderId 1, stored as 2
 
-		// Patient can still fulfill order 1
+		// Patient receives the full winning bid (auction semantics)
 		const { ephPk, ciphertextHash } = encryptForBuyer(plaintext, [pk2[0], pk2[1]], 1n, ephSk);
-		await market.write.fulfill([1n, ephPk[0], ephPk[1], ciphertextHash], {
+		const patientBalBefore = await publicClient.getBalance({
+			address: patient.account.address,
+		});
+		const fulfillTx = await market.write.fulfill([1n, ephPk[0], ephPk[1], ciphertextHash], {
 			account: patient.account,
 		});
+		const receipt = await publicClient.getTransactionReceipt({ hash: fulfillTx });
+		const gasCost = receipt.gasUsed * receipt.effectiveGasPrice;
+		const patientBalAfter = await publicClient.getBalance({ address: patient.account.address });
+		expect(patientBalAfter - patientBalBefore + gasCost).to.equal(highBid);
+
 		const order1After = await market.read.getOrder([1n]);
 		expect(order1After[3]).to.equal(true); // confirmed
 	});
@@ -591,6 +619,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				headerTuple(header),
 				headerCommit,
 				bodyCommit,
+				piiCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
@@ -638,6 +667,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				headerTuple(header),
 				headerCommit,
 				bodyCommit,
+				piiCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
@@ -649,7 +679,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		);
 		await market.write.cancelListing([0n], { account: patient.account });
 		const listing = await market.read.getListing([0n]);
-		expect(listing[9]).to.equal(false);
+		expect(listing[10]).to.equal(false);
 
 		// New listing, then place order, then cancel must fail.
 		await market.write.createListing(
@@ -657,6 +687,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				headerTuple(header),
 				headerCommit,
 				bodyCommit,
+				piiCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
@@ -676,6 +707,84 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 		} catch (e: unknown) {
 			expect((e as Error).message).to.include("pending order");
 		}
+	});
+
+	it("getListing returns piiCommit", async function () {
+		const { market } = await loadFixture(deployWithOrder);
+		const listing = await market.read.getListing([0n]);
+		expect(listing[2]).to.equal(piiCommit);
+	});
+
+	it("ListingCreated event includes piiCommit", async function () {
+		const { market } = await loadFixture(deployWithOrder);
+		const publicClient = await hre.viem.getPublicClient();
+		const logs = await publicClient.getContractEvents({
+			address: market.address,
+			abi: market.abi,
+			eventName: "ListingCreated",
+			fromBlock: 0n,
+			toBlock: "latest",
+		});
+		expect(logs.length).to.equal(1);
+		const args = logs[0].args as {
+			piiCommit: bigint;
+			headerCommit: bigint;
+			bodyCommit: bigint;
+		};
+		expect(args.piiCommit).to.equal(piiCommit);
+		expect(args.headerCommit).to.equal(headerCommit);
+		expect(args.bodyCommit).to.equal(bodyCommit);
+	});
+
+	it("createListing reverts on zero piiCommit", async function () {
+		const { market, patient } = await deployFixture();
+		try {
+			await market.write.createListing(
+				[
+					headerTuple(header),
+					headerCommit,
+					bodyCommit,
+					0n,
+					medicPkX,
+					medicPkY,
+					sigR8x,
+					sigR8y,
+					sigS,
+					price,
+				],
+				{ account: patient.account },
+			);
+			expect.fail("Should have reverted");
+		} catch (e: unknown) {
+			expect((e as Error).message).to.include("piiCommit must be non-zero");
+		}
+	});
+
+	it("body does not contain patientId or dateOfBirth", async function () {
+		// The golden-path encrypt/decrypt flow — body fields must NOT include PII.
+		const { market, patient } = await loadFixture(deployWithOrder);
+		const orderId = 0n;
+		const { ephPk, ciphertext, ciphertextHash } = encryptForBuyer(
+			plaintext,
+			[pkBuyerX, pkBuyerY],
+			orderId,
+			ephSk,
+		);
+		await market.write.fulfill([orderId, ephPk[0], ephPk[1], ciphertextHash], {
+			account: patient.account,
+		});
+		const fulfillment = await market.read.getFulfillment([orderId]);
+		const recovered = decryptForBuyer(
+			[fulfillment[0], fulfillment[1]],
+			ciphertext,
+			skBuyer,
+			orderId,
+		);
+		expect(Object.keys(recovered)).to.not.include("patientId");
+		expect(Object.keys(recovered)).to.not.include("dateOfBirth");
+		// Clinical fields are still present
+		expect(recovered["bloodType"]).to.equal(exampleRecord["bloodType"]);
+		expect(recovered["hba1c"]).to.equal(exampleRecord["hba1c"]);
 	});
 
 	describe("shareRecord", function () {
@@ -699,6 +808,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					headerTuple(header),
 					headerCommit,
 					bodyCommit,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -734,6 +844,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				doctorPkY: bigint;
 				headerCommit: bigint;
 				bodyCommit: bigint;
+				piiCommit: bigint;
 				medicPkX: bigint;
 				medicPkY: bigint;
 				ephPkX: bigint;
@@ -749,6 +860,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 			expect(args.doctorPkY).to.equal(doctorPkY);
 			expect(args.headerCommit).to.equal(headerCommit);
 			expect(args.bodyCommit).to.equal(bodyCommit);
+			expect(args.piiCommit).to.equal(piiCommit);
 			expect(args.medicPkX).to.equal(medicPkX);
 			expect(args.ephPkX).to.equal(ephPk[0]);
 			expect(args.ephPkY).to.equal(ephPk[1]);
@@ -783,6 +895,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				headerTuple(header),
 				headerCommit,
 				bodyCommit,
+				piiCommit,
 				medicPkX,
 				medicPkY,
 				sigR8x,
@@ -795,6 +908,10 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 				ciphertextHash,
 			];
 
+			// baseArgs indices after adding piiCommit at position 3:
+			// [0]=header [1]=headerCommit [2]=bodyCommit [3]=piiCommit
+			// [4]=medicPkX [5]=medicPkY [6]=sigR8x [7]=sigR8y [8]=sigS
+			// [9]=doctorPkX [10]=doctorPkY [11]=ephPkX [12]=ephPkY [13]=ciphertextHash
 			const cases: { label: string; mutate: (a: ShareArgs) => ShareArgs; msg: string }[] = [
 				{
 					label: "empty title",
@@ -839,11 +956,20 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					msg: "bodyCommit must be non-zero",
 				},
 				{
-					label: "zero medicPk",
+					label: "zero piiCommit",
 					mutate: (a) => {
 						const n = [...a] as ShareArgs;
 						n[3] = 0n;
+						return n;
+					},
+					msg: "piiCommit must be non-zero",
+				},
+				{
+					label: "zero medicPk",
+					mutate: (a) => {
+						const n = [...a] as ShareArgs;
 						n[4] = 0n;
+						n[5] = 0n;
 						return n;
 					},
 					msg: "medicPk must be non-zero",
@@ -852,7 +978,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					label: "zero sigS",
 					mutate: (a) => {
 						const n = [...a] as ShareArgs;
-						n[7] = 0n;
+						n[8] = 0n;
 						return n;
 					},
 					msg: "signature must be non-zero",
@@ -861,8 +987,8 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					label: "zero doctorPk",
 					mutate: (a) => {
 						const n = [...a] as ShareArgs;
-						n[8] = 0n;
 						n[9] = 0n;
+						n[10] = 0n;
 						return n;
 					},
 					msg: "doctorPk must be non-zero",
@@ -871,8 +997,8 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					label: "zero ephPk",
 					mutate: (a) => {
 						const n = [...a] as ShareArgs;
-						n[10] = 0n;
 						n[11] = 0n;
+						n[12] = 0n;
 						return n;
 					},
 					msg: "ephPk must be non-zero",
@@ -881,7 +1007,7 @@ describe("MedicalMarket Phase 5.2 (escrow + signal, off-chain crypto)", function
 					label: "zero ciphertextHash",
 					mutate: (a) => {
 						const n = [...a] as ShareArgs;
-						n[12] = 0n;
+						n[13] = 0n;
 						return n;
 					},
 					msg: "ciphertextHash must be non-zero",

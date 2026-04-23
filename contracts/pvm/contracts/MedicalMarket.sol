@@ -4,11 +4,13 @@ pragma solidity ^0.8.28;
 /// @title MedicalMarket — Phase 5.2
 /// @notice Encrypted-data marketplace with off-chain cryptographic verification.
 ///         The record is split into a public, medic-signed header (title,
-///         recordType, recordedAt, facility — browsable pre-purchase) and an
-///         encrypted body (the clinical payload). The medic signs
-///         Poseidon2(headerCommit, bodyCommit); buyers recompute the header
-///         commit from the on-chain fields and verify the combined signature
-///         off-chain before paying.
+///         recordType, recordedAt, facility — browsable pre-purchase), an
+///         encrypted body (the clinical payload), and a PII compartment
+///         (patientId, dateOfBirth — encrypted separately, never revealed
+///         to the researcher). The medic signs
+///         Poseidon3(headerCommit, bodyCommit, piiCommit); buyers recompute
+///         the header commit from the on-chain fields and verify the combined
+///         signature off-chain before paying.
 ///
 ///         The contract does NOT verify Poseidon(headerFields) == headerCommit
 ///         on-chain — Phase 5.2 keeps cryptography off-chain. A patient who
@@ -41,7 +43,8 @@ contract MedicalMarket {
 		string facility;
 		uint256 headerCommit; // Poseidon8(encodeHeader(header))
 		uint256 bodyCommit; // Poseidon-chain over encrypted body plaintext[32]
-		// medic attestation (signs Poseidon2(headerCommit, bodyCommit))
+		uint256 piiCommit; // Poseidon-chain over encrypted PII plaintext[8] (patientId, dob)
+		// medic attestation (signs Poseidon3(headerCommit, bodyCommit, piiCommit))
 		uint256 medicPkX;
 		uint256 medicPkY;
 		uint256 sigR8x;
@@ -84,6 +87,7 @@ contract MedicalMarket {
 		uint256 indexed listingId,
 		uint256 headerCommit,
 		uint256 bodyCommit,
+		uint256 piiCommit,
 		uint256 medicPkX,
 		uint256 medicPkY,
 		string title,
@@ -115,6 +119,7 @@ contract MedicalMarket {
 		uint256 doctorPkY,
 		uint256 headerCommit,
 		uint256 bodyCommit,
+		uint256 piiCommit,
 		uint256 medicPkX,
 		uint256 medicPkY,
 		uint256 sigR8x,
@@ -138,13 +143,16 @@ contract MedicalMarket {
 
 	/// @notice Create a listing. The header fields are stored in the clear so
 	///         researchers can filter before paying; the medic's EdDSA-Poseidon
-	///         signature is over Poseidon2(headerCommit, bodyCommit). Buyers
-	///         recompute the header commit off-chain and verify the signature
-	///         before placing an order.
+	///         signature is over Poseidon3(headerCommit, bodyCommit, piiCommit).
+	///         Buyers recompute the header commit off-chain and verify the
+	///         signature before placing an order. The piiCommit covers PII fields
+	///         (patientId, dateOfBirth) that are encrypted separately and never
+	///         exposed to the researcher.
 	function createListing(
 		HeaderInput calldata header,
 		uint256 headerCommit,
 		uint256 bodyCommit,
+		uint256 piiCommit,
 		uint256 medicPkX,
 		uint256 medicPkY,
 		uint256 sigR8x,
@@ -159,6 +167,7 @@ contract MedicalMarket {
 		require(header.recordedAt > 0, "recordedAt must be non-zero");
 		require(headerCommit != 0, "headerCommit must be non-zero");
 		require(bodyCommit != 0, "bodyCommit must be non-zero");
+		require(piiCommit != 0, "piiCommit must be non-zero");
 		require(medicPkX != 0 || medicPkY != 0, "medicPk must be non-zero");
 		require(sigS != 0, "signature must be non-zero");
 
@@ -170,6 +179,7 @@ contract MedicalMarket {
 			facility: header.facility,
 			headerCommit: headerCommit,
 			bodyCommit: bodyCommit,
+			piiCommit: piiCommit,
 			medicPkX: medicPkX,
 			medicPkY: medicPkY,
 			sigR8x: sigR8x,
@@ -185,6 +195,7 @@ contract MedicalMarket {
 			listingId,
 			headerCommit,
 			bodyCommit,
+			piiCommit,
 			medicPkX,
 			medicPkY,
 			header.title,
@@ -238,6 +249,7 @@ contract MedicalMarket {
 
 		// External call last — consistent with fulfill() and cancelOrder().
 		if (prevResearcher != address(0)) {
+			// possible constant rever blocking funds here.
 			(bool ok, ) = payable(prevResearcher).call{value: prevAmount}("");
 			require(ok, "Refund to previous bidder failed");
 		}
@@ -271,14 +283,8 @@ contract MedicalMarket {
 			ciphertextHash: ciphertextHash
 		});
 
-		(bool successPatient, ) = listing.patient.call{value: listing.price}("");
+		(bool successPatient, ) = listing.patient.call{value: order.amount}("");
 		require(successPatient, "Transfer to patient failed");
-
-		uint256 excess = order.amount - listing.price;
-		if (excess > 0) {
-			(bool successResearcher, ) = order.researcher.call{value: excess}("");
-			require(successResearcher, "Refund to researcher failed");
-		}
 
 		emit SaleFulfilled(
 			orderId,
@@ -326,6 +332,7 @@ contract MedicalMarket {
 		HeaderInput calldata header,
 		uint256 headerCommit,
 		uint256 bodyCommit,
+		uint256 piiCommit,
 		uint256 medicPkX,
 		uint256 medicPkY,
 		uint256 sigR8x,
@@ -343,6 +350,7 @@ contract MedicalMarket {
 		require(header.recordedAt > 0, "recordedAt must be non-zero");
 		require(headerCommit != 0, "headerCommit must be non-zero");
 		require(bodyCommit != 0, "bodyCommit must be non-zero");
+		require(piiCommit != 0, "piiCommit must be non-zero");
 		require(medicPkX != 0 || medicPkY != 0, "medicPk must be non-zero");
 		require(sigS != 0, "signature must be non-zero");
 		require(doctorPkX != 0 || doctorPkY != 0, "doctorPk must be non-zero");
@@ -355,6 +363,7 @@ contract MedicalMarket {
 			doctorPkY,
 			headerCommit,
 			bodyCommit,
+			piiCommit,
 			medicPkX,
 			medicPkY,
 			sigR8x,
@@ -380,6 +389,7 @@ contract MedicalMarket {
 		returns (
 			uint256 headerCommit,
 			uint256 bodyCommit,
+			uint256 piiCommit,
 			uint256 medicPkX,
 			uint256 medicPkY,
 			uint256 sigR8x,
@@ -394,6 +404,7 @@ contract MedicalMarket {
 		return (
 			l.headerCommit,
 			l.bodyCommit,
+			l.piiCommit,
 			l.medicPkX,
 			l.medicPkY,
 			l.sigR8x,

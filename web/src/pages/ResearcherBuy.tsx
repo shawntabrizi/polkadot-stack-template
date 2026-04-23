@@ -24,6 +24,7 @@ interface Listing {
 	header: MedicalHeader;
 	headerCommit: bigint;
 	bodyCommit: bigint;
+	piiCommit: bigint;
 	medicPkX: bigint;
 	medicPkY: bigint;
 	sigR8x: bigint;
@@ -34,7 +35,7 @@ interface Listing {
 	active: boolean;
 	pendingOrderId: bigint;
 	// Off-chain pre-purchase verification: recompute headerCommit from on-chain
-	// header fields and verify medic sig over Poseidon2(headerCommit, bodyCommit).
+	// header fields and verify medic sig over Poseidon3(headerCommit, bodyCommit, piiCommit).
 	headerMatch: boolean;
 	sigValid: boolean;
 }
@@ -79,6 +80,7 @@ function verifyListingOffChain(
 	header: MedicalHeader,
 	headerCommit: bigint,
 	bodyCommit: bigint,
+	piiCommit: bigint,
 	medicPk: { x: bigint; y: bigint },
 	sig: { R8x: bigint; R8y: bigint; S: bigint },
 ): { headerMatch: boolean; sigValid: boolean } {
@@ -90,7 +92,7 @@ function verifyListingOffChain(
 	}
 	let sigValid = false;
 	try {
-		const combined = computeRecordCommit(headerCommit, bodyCommit);
+		const combined = computeRecordCommit(headerCommit, bodyCommit, piiCommit);
 		sigValid = verifySignature(combined, { R8: [sig.R8x, sig.R8y], S: sig.S }, [
 			medicPk.x,
 			medicPk.y,
@@ -191,12 +193,14 @@ export default function ResearcherBuy() {
 					bigint,
 					bigint,
 					bigint,
+					bigint,
 					string,
 					boolean,
 				];
 				const [
 					headerCommit,
 					bodyCommit,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -225,6 +229,7 @@ export default function ResearcherBuy() {
 					header,
 					headerCommit,
 					bodyCommit,
+					piiCommit,
 					{ x: medicPkX, y: medicPkY },
 					{ R8x: sigR8x, R8y: sigR8y, S: sigS },
 				);
@@ -240,6 +245,7 @@ export default function ResearcherBuy() {
 					header,
 					headerCommit,
 					bodyCommit,
+					piiCommit,
 					medicPkX,
 					medicPkY,
 					sigR8x,
@@ -629,6 +635,9 @@ export default function ResearcherBuy() {
 												.slice(0, 12)
 												.padStart(12, "0")}
 											…
+										</p>
+										<p className="text-[10px] text-text-muted italic">
+											PII sealed — identity not disclosed to researcher
 										</p>
 										<p className="text-text-tertiary">
 											Patient:{" "}

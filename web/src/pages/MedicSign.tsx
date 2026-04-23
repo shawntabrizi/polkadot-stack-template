@@ -9,8 +9,10 @@ import {
 	computeBodyCommit,
 	computeHeaderCommit,
 	computeRecordCommit,
+	computePiiCommit,
 	MAX_PAYLOAD_BYTES,
 	type MedicalHeader,
+	type MedicalPii,
 	type SignedRecord,
 } from "../utils/zk";
 
@@ -53,6 +55,7 @@ export default function MedicSign() {
 
 	// Step 1 — body JSON + header fields
 	const [fields, setFields] = useState<[string, string][] | null>(null);
+	const [pii, setPii] = useState<MedicalPii>({ patientId: "", dateOfBirth: "" });
 	const [parseError, setParseError] = useState<string | null>(null);
 	const [title, setTitle] = useState("");
 	const [recordType, setRecordType] = useState(RECORD_TYPES[0]);
@@ -65,6 +68,7 @@ export default function MedicSign() {
 	const [bodyPlaintext, setBodyPlaintext] = useState<bigint[] | null>(null);
 	const [headerCommit, setHeaderCommit] = useState<bigint | null>(null);
 	const [bodyCommit, setBodyCommit] = useState<bigint | null>(null);
+	const [piiCommit, setPiiCommit] = useState<bigint | null>(null);
 	const [recordCommit, setRecordCommit] = useState<bigint | null>(null);
 	const [byteCount, setByteCount] = useState<number | null>(null);
 	const [header, setHeader] = useState<MedicalHeader | null>(null);
@@ -79,6 +83,7 @@ export default function MedicSign() {
 		setBodyPlaintext(null);
 		setHeaderCommit(null);
 		setBodyCommit(null);
+		setPiiCommit(null);
 		setRecordCommit(null);
 		setByteCount(null);
 		setHeader(null);
@@ -92,9 +97,50 @@ export default function MedicSign() {
 				setFields(null);
 				return;
 			}
-			const entries = Object.entries(json as Record<string, unknown>).map(
-				([k, v]) => [k, String(v)] as [string, string],
-			);
+			const raw = json as Record<string, unknown>;
+
+			// v4 structured format: { header, pii, body } — auto-populate all sections
+			const isV4Structured =
+				raw.header !== null &&
+				typeof raw.header === "object" &&
+				raw.pii !== null &&
+				typeof raw.pii === "object" &&
+				raw.body !== null &&
+				typeof raw.body === "object";
+
+			if (isV4Structured) {
+				const h = raw.header as Record<string, unknown>;
+				const p = raw.pii as Record<string, unknown>;
+				const b = raw.body as Record<string, unknown>;
+				if (h.title) setTitle(String(h.title));
+				if (h.recordType) setRecordType(String(h.recordType));
+				if (h.recordedAt) {
+					const d = new Date(Number(h.recordedAt) * 1000);
+					setRecordedAtISO(d.toISOString().slice(0, 10));
+				}
+				if (h.facility) setFacility(String(h.facility));
+				setPii({
+					patientId: p.patientId ? String(p.patientId) : "",
+					dateOfBirth: p.dateOfBirth ? String(p.dateOfBirth) : "",
+				});
+				const entries = Object.entries(b).map(
+					([k, v]) => [k, String(v)] as [string, string],
+				);
+				if (entries.length === 0) {
+					setParseError("Body object has no fields.");
+					setFields(null);
+					return;
+				}
+				setFields(entries);
+				return;
+			}
+
+			// Legacy flat format: extract PII keys, use everything else as body
+			setPii({
+				patientId: raw.patientId ? String(raw.patientId) : "",
+				dateOfBirth: raw.dateOfBirth ? String(raw.dateOfBirth) : "",
+			});
+			const entries = Object.entries(raw).map(([k, v]) => [k, String(v)] as [string, string]);
 			if (entries.length === 0) {
 				setParseError("JSON object has no fields.");
 				setFields(null);
@@ -115,6 +161,7 @@ export default function MedicSign() {
 		setEncoding(true);
 		setEncodeError(null);
 		try {
+			// Pass full body (including patientId/dateOfBirth) — zk.ts strips PII automatically
 			const body = Object.fromEntries(fields);
 			const pt = encodeRecordToFieldElements(body);
 			const bCommit = computeBodyCommit(pt);
@@ -126,7 +173,8 @@ export default function MedicSign() {
 				facility: facility.trim(),
 			};
 			const hCommit = computeHeaderCommit(hdr);
-			const combined = computeRecordCommit(hCommit, bCommit);
+			const pCommit = computePiiCommit(pii);
+			const combined = computeRecordCommit(hCommit, bCommit, pCommit);
 
 			const enc = new TextEncoder();
 			const keys = Object.keys(body).sort();
@@ -138,6 +186,7 @@ export default function MedicSign() {
 			setBodyPlaintext(pt);
 			setBodyCommit(bCommit);
 			setHeaderCommit(hCommit);
+			setPiiCommit(pCommit);
 			setRecordCommit(combined);
 			setHeader(hdr);
 			setByteCount(total);
@@ -166,17 +215,20 @@ export default function MedicSign() {
 		header &&
 		headerCommit &&
 		bodyCommit &&
+		piiCommit &&
 		recordCommit &&
 		bodyPlaintext &&
 		sig &&
 		pubKey
 			? JSON.stringify(
 					{
-						version: "v3-record",
+						version: "v4-record",
 						header,
+						pii,
 						body: bodyPlaintext.map((n) => n.toString()),
 						headerCommit: headerCommit.toString(),
 						bodyCommit: bodyCommit.toString(),
+						piiCommit: piiCommit.toString(),
 						recordCommit: recordCommit.toString(),
 						signature: sig,
 						medicPublicKey: pubKey,
@@ -278,6 +330,30 @@ export default function MedicSign() {
 
 				{fields && (
 					<>
+						{(pii.patientId || pii.dateOfBirth) && (
+							<div className="rounded-lg border border-polka-500/20 bg-polka-500/5 p-3 space-y-2">
+								<p className="text-xs text-polka-400 font-medium uppercase tracking-wider">
+									PII — committed on-chain, never sent to researchers
+								</p>
+								<div className="grid grid-cols-2 gap-2 text-sm">
+									<div>
+										<span className="text-text-muted text-xs">Patient ID</span>
+										<p className="font-mono text-text-primary">
+											{pii.patientId || "—"}
+										</p>
+									</div>
+									<div>
+										<span className="text-text-muted text-xs">
+											Date of birth
+										</span>
+										<p className="font-mono text-text-primary">
+											{pii.dateOfBirth || "—"}
+										</p>
+									</div>
+								</div>
+							</div>
+						)}
+
 						<table className="w-full text-sm">
 							<thead>
 								<tr className="text-text-tertiary text-xs uppercase tracking-wider">
@@ -424,12 +500,23 @@ export default function MedicSign() {
 								)}
 							</div>
 							<div>
+								<label className="label">PII commit</label>
+								<div className="input-field font-mono text-xs text-text-secondary break-all">
+									{piiCommit?.toString()}
+								</div>
+								<p className="text-xs text-text-muted mt-1">
+									Poseidon8(patientId, dateOfBirth) — on-chain proof of identity,
+									plaintext never uploaded.
+								</p>
+							</div>
+							<div>
 								<label className="label">Record commit (signed)</label>
 								<div className="input-field font-mono text-xs text-text-secondary break-all">
 									{recordCommit.toString()}
 								</div>
 								<p className="text-xs text-text-muted mt-1">
-									Poseidon2(headerCommit, bodyCommit) — what the medic signs.
+									Poseidon3(headerCommit, bodyCommit, piiCommit) — what the medic
+									signs.
 								</p>
 							</div>
 							<button
