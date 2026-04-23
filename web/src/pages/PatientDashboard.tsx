@@ -16,18 +16,14 @@ import { useChainStore } from "../store/chainStore";
 import FileDropZone from "../components/FileDropZone";
 import { type SignedRecord, type MedicalHeader, encryptRecordForBuyer } from "../utils/zk";
 
-// TODO(ecdsa-migration): replace medicPkX/Y + sigR8x/y/S with medicAddress: Address + medicSignature: `0x${string}`
 interface Listing {
 	id: bigint;
 	header: MedicalHeader;
 	headerCommit: bigint;
 	bodyCommit: bigint;
 	piiCommit: bigint;
-	medicPkX: bigint;
-	medicPkY: bigint;
-	sigR8x: bigint;
-	sigR8y: bigint;
-	sigS: bigint;
+	medicAddress: Address;
+	medicSignature: `0x${string}`;
 	price: bigint;
 	patient: string;
 	active: boolean;
@@ -103,7 +99,8 @@ export default function PatientDashboard() {
 				"bodyCommit" in json &&
 				"piiCommit" in json &&
 				"recordCommit" in json &&
-				"signature" in json
+				"medicAddress" in json &&
+				"medicSignature" in json
 			) {
 				setImportedPackage(json as SignedRecord);
 			} else {
@@ -180,8 +177,8 @@ export default function PatientDashboard() {
 
 			const result: Listing[] = [];
 			for (let i = 0n; i < count; i++) {
-				// getListing returns: headerCommit, bodyCommit, piiCommit, medicPkX, medicPkY,
-				//                     sigR8x, sigR8y, sigS, price, patient, active
+				// getListing returns: headerCommit, bodyCommit, piiCommit, medicAddress,
+				//                     medicSignature, price, patient, active
 				const rawTuple = (await client.readContract({
 					address: addr,
 					abi: medicalMarketAbi,
@@ -191,11 +188,8 @@ export default function PatientDashboard() {
 					bigint,
 					bigint,
 					bigint,
-					bigint,
-					bigint,
-					bigint,
-					bigint,
-					bigint,
+					Address,
+					`0x${string}`,
 					bigint,
 					string,
 					boolean,
@@ -205,11 +199,8 @@ export default function PatientDashboard() {
 					headerCommit,
 					bodyCommit,
 					piiCommit,
-					medicPkX,
-					medicPkY,
-					sigR8x,
-					sigR8y,
-					sigS,
+					medicAddress,
+					medicSignature,
 					price,
 					patient,
 					active,
@@ -244,11 +235,8 @@ export default function PatientDashboard() {
 					headerCommit,
 					bodyCommit,
 					piiCommit,
-					medicPkX,
-					medicPkY,
-					sigR8x,
-					sigR8y,
-					sigS,
+					medicAddress,
+					medicSignature,
 					price,
 					patient,
 					active,
@@ -284,11 +272,8 @@ export default function PatientDashboard() {
 			const headerCommit = BigInt(importedPackage.headerCommit);
 			const bodyCommit = BigInt(importedPackage.bodyCommit);
 			const piiCommit = BigInt(importedPackage.piiCommit);
-			const medicPkX = BigInt(importedPackage.medicPublicKey.x);
-			const medicPkY = BigInt(importedPackage.medicPublicKey.y);
-			const sigR8x = BigInt(importedPackage.signature.R8x);
-			const sigR8y = BigInt(importedPackage.signature.R8y);
-			const sigS = BigInt(importedPackage.signature.S);
+			const medicAddress = importedPackage.medicAddress as Address;
+			const medicSignature = importedPackage.medicSignature as `0x${string}`;
 			const priceWei = parseEther(priceStr);
 			const headerInput = {
 				title: importedPackage.header.title,
@@ -301,11 +286,8 @@ export default function PatientDashboard() {
 				headerCommit,
 				bodyCommit,
 				piiCommit,
-				medicPkX,
-				medicPkY,
-				sigR8x,
-				sigR8y,
-				sigS,
+				medicAddress,
+				medicSignature,
 				priceWei,
 			]);
 			setTxStatus(`Transaction submitted: ${txHash}`);
@@ -358,14 +340,14 @@ export default function PatientDashboard() {
 				abi: medicalMarketAbi,
 				functionName: "getOrder",
 				args: [orderId],
-			})) as unknown as readonly [bigint, string, bigint, boolean, boolean, bigint, bigint];
-			const pkBuyer = { x: order[5], y: order[6] };
+			})) as unknown as readonly [bigint, string, bigint, boolean, boolean, `0x${string}`];
+			const buyerPubKeyHex = order[5];
+			const buyerCompressedPubKey = hexToBytes(buyerPubKeyHex.slice(2)); // strip 0x
 
 			setTxStatus("Encrypting record for buyer…");
-			const { ephPk, ciphertextBytes } = encryptRecordForBuyer({
+			const { ephPubKey, ciphertextBytes } = await encryptRecordForBuyer({
 				plaintext: pkg.body.map(BigInt),
-				pkBuyer,
-				nonce: orderId,
+				buyerCompressedPubKey,
 			});
 
 			const ciphertextHash32 = blake2b(ciphertextBytes, undefined, 32);
@@ -385,10 +367,10 @@ export default function PatientDashboard() {
 			);
 
 			setTxStatus("Submitting fulfill on-chain…");
+			const ephPubKeyHex = bytesToHex(ephPubKey);
 			const { txHash } = await reviveCall("fulfill", [
 				orderId,
-				ephPk.x,
-				ephPk.y,
+				ephPubKeyHex,
 				ciphertextHashBig,
 			]);
 			setTxStatus(`Done. Tx: ${txHash}`);
@@ -528,6 +510,8 @@ export default function PatientDashboard() {
 							<span>{formatRecordedAt(importedPackage.header.recordedAt)}</span>
 							<span className="text-text-tertiary">Facility</span>
 							<span>{importedPackage.header.facility}</span>
+							<span className="text-text-tertiary">Medic</span>
+							<span className="font-mono">{importedPackage.medicAddress}</span>
 						</div>
 						<p className="text-text-muted">
 							{Object.keys(importedPackage.bodyFieldsPreview).length} body fields ·

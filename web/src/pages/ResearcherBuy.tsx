@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { type Address, formatEther, parseEther } from "viem";
+import { type Address, formatEther, parseEther, verifyMessage, toBytes, hexToBytes } from "viem";
 import { medicalMarketAbi, getPublicClient } from "../config/evm";
 import Spinner from "../components/Spinner";
 import Toast from "../components/Toast";
@@ -16,28 +16,20 @@ import {
 	encodeRecordToFieldElements,
 	type MedicalHeader,
 } from "../utils/zk";
-// TODO(ecdsa-migration): replace @zk-kit/eddsa-poseidon with viem's recoverAddress.
-import { verifySignature } from "@zk-kit/eddsa-poseidon";
 import { blake2b } from "blakejs";
 
-// TODO(ecdsa-migration): replace medicPkX/Y + sigR8x/y/S with medicAddress: Address + medicSignature: `0x${string}`
 interface Listing {
 	id: bigint;
 	header: MedicalHeader;
 	headerCommit: bigint;
 	bodyCommit: bigint;
 	piiCommit: bigint;
-	medicPkX: bigint;
-	medicPkY: bigint;
-	sigR8x: bigint;
-	sigR8y: bigint;
-	sigS: bigint;
+	medicAddress: Address;
+	medicSignature: `0x${string}`;
 	price: bigint;
 	patient: Address;
 	active: boolean;
 	pendingOrderId: bigint;
-	// Off-chain pre-purchase verification: recompute headerCommit from on-chain
-	// header fields and verify medic sig over Poseidon3(headerCommit, bodyCommit, piiCommit).
 	headerMatch: boolean;
 	sigValid: boolean;
 }
@@ -49,8 +41,7 @@ interface Order {
 	amount: bigint;
 	confirmed: boolean;
 	cancelled: boolean;
-	pkBuyerX: bigint;
-	pkBuyerY: bigint;
+	buyerPubKey: `0x${string}`;
 }
 
 interface PendingOffer {
@@ -78,17 +69,14 @@ function formatRecordedAt(unixSeconds: number): string {
 	});
 }
 
-// TODO(ecdsa-migration): replace signature params with (medicAddress: Address, medicSignature: `0x${string}`).
-// Use viem's recoverAddress({ hash: keccak256(recordCommit), signature: medicSignature }) and compare to medicAddress.
-// recordCommit can stay Poseidon3 for now (it's just bytes to sign), or migrate to keccak256 to drop poseidon-lite.
-function verifyListingOffChain(
+async function verifyListingOffChain(
 	header: MedicalHeader,
 	headerCommit: bigint,
 	bodyCommit: bigint,
 	piiCommit: bigint,
-	medicPk: { x: bigint; y: bigint },
-	sig: { R8x: bigint; R8y: bigint; S: bigint },
-): { headerMatch: boolean; sigValid: boolean } {
+	medicAddress: Address,
+	medicSignature: `0x${string}`,
+): Promise<{ headerMatch: boolean; sigValid: boolean }> {
 	let headerMatch = false;
 	try {
 		headerMatch = computeHeaderCommit(header) === headerCommit;
@@ -97,11 +85,12 @@ function verifyListingOffChain(
 	}
 	let sigValid = false;
 	try {
-		const combined = computeRecordCommit(headerCommit, bodyCommit, piiCommit);
-		sigValid = verifySignature(combined, { R8: [sig.R8x, sig.R8y], S: sig.S }, [
-			medicPk.x,
-			medicPk.y,
-		]);
+		const recordCommit = computeRecordCommit(headerCommit, bodyCommit, piiCommit);
+		sigValid = await verifyMessage({
+			address: medicAddress,
+			message: { raw: toBytes(recordCommit, { size: 32 }) },
+			signature: medicSignature,
+		});
 	} catch {
 		sigValid = false;
 	}
@@ -193,11 +182,8 @@ export default function ResearcherBuy() {
 					bigint,
 					bigint,
 					bigint,
-					bigint,
-					bigint,
-					bigint,
-					bigint,
-					bigint,
+					Address,
+					`0x${string}`,
 					bigint,
 					string,
 					boolean,
@@ -206,11 +192,8 @@ export default function ResearcherBuy() {
 					headerCommit,
 					bodyCommit,
 					piiCommit,
-					medicPkX,
-					medicPkY,
-					sigR8x,
-					sigR8y,
-					sigS,
+					medicAddress,
+					medicSignature,
 					price,
 					patient,
 					active,
@@ -230,13 +213,13 @@ export default function ResearcherBuy() {
 					facility: headerTuple[3],
 				};
 
-				const { headerMatch, sigValid } = verifyListingOffChain(
+				const { headerMatch, sigValid } = await verifyListingOffChain(
 					header,
 					headerCommit,
 					bodyCommit,
 					piiCommit,
-					{ x: medicPkX, y: medicPkY },
-					{ R8x: sigR8x, R8y: sigR8y, S: sigS },
+					medicAddress,
+					medicSignature,
 				);
 
 				const pendingOrderId = (await client.readContract({
@@ -251,11 +234,8 @@ export default function ResearcherBuy() {
 					headerCommit,
 					bodyCommit,
 					piiCommit,
-					medicPkX,
-					medicPkY,
-					sigR8x,
-					sigR8y,
-					sigS,
+					medicAddress,
+					medicSignature,
 					price,
 					patient: patient as Address,
 					active,
@@ -274,7 +254,7 @@ export default function ResearcherBuy() {
 						abi: medicalMarketAbi,
 						functionName: "getOrder",
 						args: [listing.pendingOrderId - 1n],
-					})) as [bigint, string, bigint, boolean, boolean, bigint, bigint];
+					})) as [bigint, string, bigint, boolean, boolean, `0x${string}`];
 					offersMap[listing.id.toString()] = {
 						orderId: listing.pendingOrderId - 1n,
 						amount: offerResult[2],
@@ -297,9 +277,8 @@ export default function ResearcherBuy() {
 					abi: medicalMarketAbi,
 					functionName: "getOrder",
 					args: [i],
-				})) as [bigint, string, bigint, boolean, boolean, bigint, bigint];
-				const [listingId, researcher, amount, confirmed, cancelled, pkBuyerX, pkBuyerY] =
-					result;
+				})) as [bigint, string, bigint, boolean, boolean, `0x${string}`];
+				const [listingId, researcher, amount, confirmed, cancelled, buyerPubKey] = result;
 				if (researcher.toLowerCase() !== currentAccount.evmAddress.toLowerCase()) continue;
 				fetchedOrders.push({
 					id: i,
@@ -308,8 +287,7 @@ export default function ResearcherBuy() {
 					amount,
 					confirmed,
 					cancelled,
-					pkBuyerX,
-					pkBuyerY,
+					buyerPubKey,
 				});
 			}
 			setOrders(fetchedOrders);
@@ -336,12 +314,8 @@ export default function ResearcherBuy() {
 			const amountWei = customAmountWei ?? listing.price;
 			setTxStatus("Placing order...");
 			const skStorageKey = `phase5-sk-buyer:${currentAccount.evmAddress}:${ethRpcUrl}:${listing.id}`;
-			const { pk } = getOrCreateBuyerKey(skStorageKey);
-			const { txHash } = await reviveCall(
-				"placeBuyOrder",
-				[listing.id, pk.x, pk.y],
-				amountWei,
-			);
+			const { pkHex } = getOrCreateBuyerKey(skStorageKey);
+			const { txHash } = await reviveCall("placeBuyOrder", [listing.id, pkHex], amountWei);
 			setBidAmounts((prev) => ({ ...prev, [listing.id.toString()]: "" }));
 			setTxStatus(`Buy order placed. Tx: ${txHash}`);
 			loadAll();
@@ -376,8 +350,8 @@ export default function ResearcherBuy() {
 				abi: medicalMarketAbi,
 				functionName: "getFulfillment",
 				args: [order.id],
-			})) as [bigint, bigint, bigint];
-			const [ephPkX, ephPkY, ciphertextHash] = fulfillment;
+			})) as [`0x${string}`, bigint];
+			const [ephPubKeyHex, ciphertextHash] = fulfillment;
 
 			if (ciphertextHash === 0n) {
 				setTxStatus(
@@ -421,19 +395,13 @@ export default function ResearcherBuy() {
 			setTxStatus("Decrypting record...");
 			const skStorageKey = `phase5-sk-buyer:${currentAccount.evmAddress}:${ethRpcUrl}:${order.listingId}`;
 			const { sk } = getOrCreateBuyerKey(skStorageKey);
-			const fields = decryptRecord({
-				ephPk: { x: ephPkX, y: ephPkY },
+			const ephCompressedPubKey = hexToBytes(ephPubKeyHex);
+			const fields = await decryptRecord({
+				ephCompressedPubKey,
 				ciphertextBytes: matchedData,
 				skBuyer: sk,
-				nonce: order.id,
 			});
 
-			// Phase 5.2 off-chain verification after decrypt:
-			// (1) bodyCommit recomputed from the decrypted body must match
-			//     listing.bodyCommit (locked at listing time);
-			// (2) medic's EdDSA-Poseidon signature validity over the combined
-			//     recordCommit was already verified pre-purchase and stored on
-			//     listing.sigValid — re-reading it here is free.
 			setTxStatus("Verifying bodyCommit...");
 			const recoveredPlaintext = encodeRecordToFieldElements(fields);
 			const recomputedBody = computeBodyCommit(recoveredPlaintext);
@@ -455,7 +423,7 @@ export default function ResearcherBuy() {
 				);
 			} else if (!listing.sigValid) {
 				setTxStatus(
-					"WARNING: medic signature invalid — published listing is not signed by the claimed medic pubkey.",
+					"WARNING: medic signature invalid — published listing is not signed by the claimed medic address.",
 				);
 			} else {
 				setTxStatus("Decrypted and verified.");

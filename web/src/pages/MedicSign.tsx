@@ -1,7 +1,5 @@
 import { useState, useCallback } from "react";
-// TODO(ecdsa-migration): replace @zk-kit/eddsa-poseidon with wallet.signRaw() via the
-// Polkadot.js extension (type: "bytes"). Drop signMessage + derivePublicKey entirely.
-import { signMessage, derivePublicKey } from "@zk-kit/eddsa-poseidon";
+import { toBytes } from "viem";
 import { evmDevAccounts } from "../config/evm";
 import { devAccounts } from "../hooks/useAccount";
 import FileDropZone from "../components/FileDropZone";
@@ -17,10 +15,6 @@ import {
 	type MedicalPii,
 	type SignedRecord,
 } from "../utils/zk";
-
-function bigintToHex(n: bigint): string {
-	return "0x" + n.toString(16).padStart(64, "0");
-}
 
 function truncate(s: string): string {
 	return s.slice(0, 10) + "…" + s.slice(-6);
@@ -76,8 +70,8 @@ export default function MedicSign() {
 	const [header, setHeader] = useState<MedicalHeader | null>(null);
 
 	// Step 3
-	const [sig, setSig] = useState<{ R8x: string; R8y: string; S: string } | null>(null);
-	const [pubKey, setPubKey] = useState<{ x: string; y: string } | null>(null);
+	const [medicAddress, setMedicAddress] = useState<string | null>(null);
+	const [medicSignature, setMedicSignature] = useState<string | null>(null);
 
 	const onFileBytes = useCallback((bytes: Uint8Array) => {
 		setParseError(null);
@@ -89,8 +83,8 @@ export default function MedicSign() {
 		setRecordCommit(null);
 		setByteCount(null);
 		setHeader(null);
-		setSig(null);
-		setPubKey(null);
+		setMedicAddress(null);
+		setMedicSignature(null);
 		setStep(1);
 		try {
 			const json: unknown = JSON.parse(new TextDecoder().decode(bytes));
@@ -199,23 +193,21 @@ export default function MedicSign() {
 		}
 	}
 
-	// TODO(ecdsa-migration): replace this entire function with a wallet.signRaw() call.
-	// Use the connected Talisman/Polkadot.js account's Ethereum address; call
-	// web3FromAddress(account) then signer.signRaw({ address, data: toHex(recordCommit), type: "bytes" }).
-	// Store { medicAddress: account, medicSignature: hex } instead of BJJ sig components.
-	// NOTE: verify the exact EIP-191 prefix Talisman applies before wiring verification — probe with
-	// one sign+recover round trip to confirm the payload matches viem recoverAddress expectations.
-	function signWithWallet() {
+	// Sign the recordCommit using the medic's Ethereum private key (EIP-191 personal_sign).
+	// The resulting 65-byte signature and the medic's address replace the old BJJ fields.
+	async function signWithWallet() {
 		if (!recordCommit) return;
-		const privKey = evmDevAccounts[selectedAccount].privateKey;
-		const signature = signMessage(privKey, recordCommit);
-		const pk = derivePublicKey(privKey);
-		setSig({
-			R8x: bigintToHex(signature.R8[0]),
-			R8y: bigintToHex(signature.R8[1]),
-			S: bigintToHex(signature.S),
-		});
-		setPubKey({ x: bigintToHex(pk[0]), y: bigintToHex(pk[1]) });
+		try {
+			const account = evmDevAccounts[selectedAccount].account;
+			// EIP-191: sign raw 32-byte commit (personal_sign prepends the "Ethereum Signed Message" prefix)
+			const sig = await account.signMessage({
+				message: { raw: toBytes(recordCommit, { size: 32 }) },
+			});
+			setMedicAddress(account.address);
+			setMedicSignature(sig);
+		} catch (err) {
+			setEncodeError(err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	const packageJson =
@@ -226,8 +218,8 @@ export default function MedicSign() {
 		piiCommit &&
 		recordCommit &&
 		bodyPlaintext &&
-		sig &&
-		pubKey
+		medicAddress &&
+		medicSignature
 			? JSON.stringify(
 					{
 						version: "v4-record",
@@ -238,8 +230,8 @@ export default function MedicSign() {
 						bodyCommit: bodyCommit.toString(),
 						piiCommit: piiCommit.toString(),
 						recordCommit: recordCommit.toString(),
-						signature: sig,
-						medicPublicKey: pubKey,
+						medicAddress,
+						medicSignature,
 						signedAt: new Date().toISOString(),
 						bodyFieldsPreview: Object.fromEntries(fields),
 					} satisfies SignedRecord,
@@ -295,8 +287,8 @@ export default function MedicSign() {
 					value={selectedAccount}
 					onChange={(e) => {
 						setSelectedAccount(parseInt(e.target.value));
-						setSig(null);
-						setPubKey(null);
+						setMedicAddress(null);
+						setMedicSignature(null);
 					}}
 					className="input-field w-full"
 				>
@@ -513,8 +505,8 @@ export default function MedicSign() {
 									{piiCommit?.toString()}
 								</div>
 								<p className="text-xs text-text-muted mt-1">
-									Poseidon8(patientId, dateOfBirth) — on-chain proof of identity,
-									plaintext never uploaded.
+									keccak256(patientId, dateOfBirth fields) — on-chain proof of
+									identity, plaintext never uploaded.
 								</p>
 							</div>
 							<div>
@@ -523,7 +515,7 @@ export default function MedicSign() {
 									{recordCommit.toString()}
 								</div>
 								<p className="text-xs text-text-muted mt-1">
-									Poseidon3(headerCommit, bodyCommit, piiCommit) — what the medic
+									keccak256(headerCommit, bodyCommit, piiCommit) — what the medic
 									signs.
 								</p>
 							</div>
@@ -549,25 +541,21 @@ export default function MedicSign() {
 						done={stepDone(3)}
 					/>
 
-					{!sig ? (
+					{!medicSignature ? (
 						<button onClick={signWithWallet} className="btn-primary">
 							Sign Commit with Wallet
 						</button>
 					) : (
 						<div className="space-y-3">
-							<OutputField label="Signature R8x" value={sig.R8x} />
-							<OutputField label="Signature R8y" value={sig.R8y} />
-							<OutputField label="Signature S" value={sig.S} />
-							{pubKey && (
-								<OutputField
-									label="Public Key"
-									value={truncate(pubKey.x) + " / " + truncate(pubKey.y)}
-								/>
-							)}
+							<OutputField label="Medic Address" value={medicAddress ?? ""} />
+							<OutputField
+								label="Signature (65 bytes)"
+								value={truncate(medicSignature)}
+							/>
 						</div>
 					)}
 
-					{sig && packageJson && (
+					{medicSignature && packageJson && (
 						<div className="space-y-2">
 							<div className="flex gap-2">
 								<button

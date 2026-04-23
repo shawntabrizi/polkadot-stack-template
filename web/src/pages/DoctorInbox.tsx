@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { type Address, parseAbiItem } from "viem";
+import { type Address, parseAbiItem, verifyMessage, toBytes, hexToBytes } from "viem";
 import { getPublicClient } from "../config/evm";
 import Toast from "../components/Toast";
 import { getDeploymentForRpc } from "../config/network";
@@ -14,11 +14,9 @@ import {
 	encodeRecordToFieldElements,
 	type MedicalHeader,
 } from "../utils/zk";
-// TODO(ecdsa-migration): replace @zk-kit/eddsa-poseidon with viem's recoverAddress.
-import { verifySignature } from "@zk-kit/eddsa-poseidon";
 
 // ---------------------------------------------------------------------------
-// Helpers (mirror ResearcherBuy conventions — do not modify that file)
+// Helpers
 // ---------------------------------------------------------------------------
 
 function uint256ToHashHex(n: bigint): string {
@@ -37,25 +35,14 @@ function truncate(addr: string): string {
 	return `${addr.slice(0, 8)}...${addr.slice(-4)}`;
 }
 
-function truncateHex(hex: string): string {
-	// Same first-6 / last-4 convention ResearcherBuy uses for long hexes.
-	return `${hex.slice(0, 6)}...${hex.slice(-4)}`;
-}
-
-// TODO(ecdsa-migration): replace (medicPk, sig) with (medicAddress: Address, medicSignature: `0x${string}`).
-// Use viem recoverAddress over keccak256(recordCommit). Also update RecordShared event to emit medicAddress
-// instead of medicPkX/Y/sigR8x/y/S — shrinks log size significantly.
-function verifyShareOffChain(
+async function verifyShareOffChain(
 	header: MedicalHeader,
 	headerCommit: bigint,
 	bodyCommit: bigint,
-	// piiCommit is not emitted by the RecordShared event; callers pass 0n for
-	// v3 shares (no PII compartment) and the on-chain value for v4 shares once
-	// the event is updated to include it.
 	piiCommit: bigint,
-	medicPk: { x: bigint; y: bigint },
-	sig: { R8x: bigint; R8y: bigint; S: bigint },
-): { headerMatch: boolean; sigValid: boolean } {
+	medicAddress: Address,
+	medicSignature: `0x${string}`,
+): Promise<{ headerMatch: boolean; sigValid: boolean }> {
 	let headerMatch = false;
 	try {
 		headerMatch = computeHeaderCommit(header) === headerCommit;
@@ -64,11 +51,12 @@ function verifyShareOffChain(
 	}
 	let sigValid = false;
 	try {
-		const combined = computeRecordCommit(headerCommit, bodyCommit, piiCommit);
-		sigValid = verifySignature(combined, { R8: [sig.R8x, sig.R8y], S: sig.S }, [
-			medicPk.x,
-			medicPk.y,
-		]);
+		const recordCommit = computeRecordCommit(headerCommit, bodyCommit, piiCommit);
+		sigValid = await verifyMessage({
+			address: medicAddress,
+			message: { raw: toBytes(recordCommit, { size: 32 }) },
+			signature: medicSignature,
+		});
 	} catch {
 		sigValid = false;
 	}
@@ -80,30 +68,23 @@ function verifyShareOffChain(
 // ---------------------------------------------------------------------------
 
 const recordSharedEvent = parseAbiItem(
-	"event RecordShared(address indexed patient, uint256 indexed doctorPkX, uint256 doctorPkY, uint256 headerCommit, uint256 bodyCommit, uint256 medicPkX, uint256 medicPkY, uint256 sigR8x, uint256 sigR8y, uint256 sigS, uint256 ephPkX, uint256 ephPkY, uint256 ciphertextHash, string title, string recordType, uint64 recordedAt, string facility)",
+	"event RecordShared(address indexed patient, address indexed doctorAddress, uint256 headerCommit, uint256 bodyCommit, uint256 piiCommit, address medicAddress, bytes medicSignature, bytes ephPubKey, uint256 ciphertextHash, string title, string recordType, uint64 recordedAt, string facility)",
 );
 
-// TODO(ecdsa-migration): replace medicPkX/Y + sigR8x/y/S with medicAddress: Address + medicSignature: `0x${string}`.
-// Also replace doctorPkX/Y with doctorAddress: Address so inbox filtering uses address not BJJ point.
 interface IncomingShare {
 	patient: Address;
-	doctorPkX: bigint;
-	doctorPkY: bigint;
+	doctorAddress: Address;
 	headerCommit: bigint;
 	bodyCommit: bigint;
-	medicPkX: bigint;
-	medicPkY: bigint;
-	sigR8x: bigint;
-	sigR8y: bigint;
-	sigS: bigint;
-	ephPkX: bigint;
-	ephPkY: bigint;
+	piiCommit: bigint;
+	medicAddress: Address;
+	medicSignature: `0x${string}`;
+	ephPubKey: `0x${string}`;
 	ciphertextHash: bigint;
 	header: MedicalHeader;
 	blockNumber: bigint;
 	logIndex: number;
 	txHash: string;
-	// Off-chain pre-decrypt verification:
 	headerMatch: boolean;
 	sigValid: boolean;
 }
@@ -115,7 +96,7 @@ interface DecryptedShare {
 }
 
 // ---------------------------------------------------------------------------
-// Chip component (inline — no new files)
+// Chip component
 // ---------------------------------------------------------------------------
 
 function Chip({ ok, label }: { ok: boolean; label: string }) {
@@ -131,7 +112,7 @@ function Chip({ ok, label }: { ok: boolean; label: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-share card (inline sub-component)
+// Per-share card
 // ---------------------------------------------------------------------------
 
 function IncomingShareCard({
@@ -143,7 +124,7 @@ function IncomingShareCard({
 }: {
 	share: IncomingShare;
 	stmtCache: Map<string, Uint8Array>;
-	skDoctor: bigint;
+	skDoctor: Uint8Array;
 	onDecrypted: (key: string, result: DecryptedShare) => void;
 	decrypted: DecryptedShare | undefined;
 }) {
@@ -154,7 +135,7 @@ function IncomingShareCard({
 	const cacheKey = useMemo(() => uint256ToHashHex(share.ciphertextHash), [share.ciphertextHash]);
 	const storeKey = `${share.txHash}:${share.logIndex}`;
 
-	const tryDecrypt = useCallback(() => {
+	const tryDecrypt = useCallback(async () => {
 		const matched = stmtCache.get(cacheKey);
 		if (!matched) {
 			setLocalStatus("Waiting for ciphertext in Statement Store…");
@@ -162,12 +143,11 @@ function IncomingShareCard({
 		}
 		try {
 			setLocalStatus("Decrypting record…");
-			// Share-flow nonce is 0n (matches MedicalMarket.shareWithDoctor encryption path).
-			const fields = decryptRecord({
-				ephPk: { x: share.ephPkX, y: share.ephPkY },
+			const ephCompressedPubKey = hexToBytes(share.ephPubKey);
+			const fields = await decryptRecord({
+				ephCompressedPubKey,
 				ciphertextBytes: matched,
 				skBuyer: skDoctor,
-				nonce: 0n,
 			});
 			const recoveredPlaintext = encodeRecordToFieldElements(fields);
 			const recomputedBody = computeBodyCommit(recoveredPlaintext);
@@ -185,21 +165,18 @@ function IncomingShareCard({
 		cacheKey,
 		stmtCache,
 		skDoctor,
-		share.ephPkX,
-		share.ephPkY,
+		share.ephPubKey,
 		share.bodyCommit,
 		share.sigValid,
 		onDecrypted,
 		storeKey,
 	]);
 
-	// If the user expanded before the Statement Store cache populated, retry when
-	// the cache updates so "Waiting for ciphertext…" resolves automatically.
 	useEffect(() => {
 		if (!expanded) return;
 		if (decrypted) return;
 		if (!stmtCache.get(cacheKey)) return;
-		tryDecrypt();
+		void tryDecrypt(); // eslint-disable-line react-hooks/set-state-in-effect
 	}, [expanded, decrypted, stmtCache, cacheKey, tryDecrypt]);
 
 	function onToggle() {
@@ -319,8 +296,6 @@ export default function DoctorInbox() {
 	const [decryptedByKey, setDecryptedByKey] = useState<Record<string, DecryptedShare>>({});
 	const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
-	// Doctor key is a cryptographic inbox identity, not tied to any wallet.
-	// Storage namespace is global ("doctor-skey:default") — not per-EVM-account.
 	const doctorKey = useMemo(() => getOrCreateBuyerKey("doctor-skey:default"), []);
 
 	useEffect(() => {
@@ -362,10 +337,6 @@ export default function DoctorInbox() {
 				return;
 			}
 
-			// Fetch all RecordShared events and filter client-side; the PVM eth-rpc
-			// adapter doesn't support null wildcards in the middle of a topics array
-			// (e.g. [eventSig, null, doctorPkX]), so server-side indexed filtering
-			// is skipped entirely.
 			const logs = await client.getLogs({
 				address: addr,
 				event: recordSharedEvent,
@@ -377,21 +348,16 @@ export default function DoctorInbox() {
 			for (const l of logs) {
 				const args = l.args;
 				if (!args) continue;
-				if (args.doctorPkX !== doctorKey.pk.x || args.doctorPkY !== doctorKey.pk.y)
-					continue;
+				if (args.doctorAddress?.toLowerCase() !== doctorKey.address.toLowerCase()) continue;
 				if (
 					args.patient === undefined ||
-					args.doctorPkX === undefined ||
-					args.doctorPkY === undefined ||
+					args.doctorAddress === undefined ||
 					args.headerCommit === undefined ||
 					args.bodyCommit === undefined ||
-					args.medicPkX === undefined ||
-					args.medicPkY === undefined ||
-					args.sigR8x === undefined ||
-					args.sigR8y === undefined ||
-					args.sigS === undefined ||
-					args.ephPkX === undefined ||
-					args.ephPkY === undefined ||
+					args.piiCommit === undefined ||
+					args.medicAddress === undefined ||
+					args.medicSignature === undefined ||
+					args.ephPubKey === undefined ||
 					args.ciphertextHash === undefined ||
 					args.title === undefined ||
 					args.recordType === undefined ||
@@ -408,28 +374,24 @@ export default function DoctorInbox() {
 					facility: args.facility,
 				};
 
-				const { headerMatch, sigValid } = verifyShareOffChain(
+				const { headerMatch, sigValid } = await verifyShareOffChain(
 					header,
 					args.headerCommit,
 					args.bodyCommit,
-					0n, // RecordShared event does not carry piiCommit; use 0n for v3 shares
-					{ x: args.medicPkX, y: args.medicPkY },
-					{ R8x: args.sigR8x, R8y: args.sigR8y, S: args.sigS },
+					args.piiCommit,
+					args.medicAddress as Address,
+					args.medicSignature as `0x${string}`,
 				);
 
 				mine.push({
 					patient: args.patient as Address,
-					doctorPkX: args.doctorPkX,
-					doctorPkY: args.doctorPkY,
+					doctorAddress: args.doctorAddress as Address,
 					headerCommit: args.headerCommit,
 					bodyCommit: args.bodyCommit,
-					medicPkX: args.medicPkX,
-					medicPkY: args.medicPkY,
-					sigR8x: args.sigR8x,
-					sigR8y: args.sigR8y,
-					sigS: args.sigS,
-					ephPkX: args.ephPkX,
-					ephPkY: args.ephPkY,
+					piiCommit: args.piiCommit,
+					medicAddress: args.medicAddress as Address,
+					medicSignature: args.medicSignature as `0x${string}`,
+					ephPubKey: args.ephPubKey as `0x${string}`,
 					ciphertextHash: args.ciphertextHash,
 					header,
 					blockNumber: l.blockNumber ?? 0n,
@@ -445,14 +407,14 @@ export default function DoctorInbox() {
 			);
 			setShares(mine);
 			if (mine.length === 0) {
-				setTxStatus("No incoming shares found for your doctor pubkey yet.");
+				setTxStatus("No incoming shares found for your doctor address yet.");
 			}
 		} catch (e) {
 			setTxStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
 		} finally {
 			setLoading(false);
 		}
-	}, [contractAddress, ethRpcUrl, doctorKey.pk.x, doctorKey.pk.y]);
+	}, [contractAddress, ethRpcUrl, doctorKey.address]);
 
 	useEffect(() => {
 		if (contractAddress) {
@@ -463,11 +425,8 @@ export default function DoctorInbox() {
 		}
 	}, [contractAddress, ethRpcUrl, loadShares]);
 
-	const pkXHex = uint256ToHashHex(doctorKey.pk.x);
-	const pkYHex = uint256ToHashHex(doctorKey.pk.y);
-
 	async function copyPubkeyAsJson() {
-		const payload = JSON.stringify({ x: pkXHex, y: pkYHex });
+		const payload = JSON.stringify({ address: doctorKey.address, pubKey: doctorKey.pkHex });
 		try {
 			await navigator.clipboard.writeText(payload);
 			setCopyFeedback("Copied");
@@ -516,7 +475,7 @@ export default function DoctorInbox() {
 
 			<div className="card space-y-3">
 				<div className="flex items-center justify-between gap-2 flex-wrap">
-					<h2 className="section-title">Your doctor pubkey (BabyJubJub)</h2>
+					<h2 className="section-title">Your doctor key (secp256k1)</h2>
 					<div className="flex items-center gap-2">
 						{copyFeedback && (
 							<span className="text-xs text-accent-green">{copyFeedback}</span>
@@ -531,21 +490,19 @@ export default function DoctorInbox() {
 				</div>
 				<div className="space-y-1">
 					<p className="font-mono text-xs text-text-secondary break-all">
-						<span className="text-text-tertiary">x:</span> {pkXHex}{" "}
-						<span className="text-text-muted">({truncateHex(pkXHex)})</span>
+						<span className="text-text-tertiary">address:</span> {doctorKey.address}
 					</p>
 					<p className="font-mono text-xs text-text-secondary break-all">
-						<span className="text-text-tertiary">y:</span> {pkYHex}{" "}
-						<span className="text-text-muted">({truncateHex(pkYHex)})</span>
+						<span className="text-text-tertiary">pubKey:</span> {doctorKey.pkHex}
 					</p>
 				</div>
 				<p className="text-text-tertiary text-xs">
-					Send this to patients out-of-band (email/SMS/QR). Anyone with this key can send
-					you encrypted records; only your browser can decrypt.
+					Send this to patients out-of-band (email/SMS/QR). Anyone with your pubKey can
+					send you encrypted records; only your browser can decrypt.
 				</p>
 				<p className="text-text-muted text-[10px]">
 					Secret key stored in this browser at{" "}
-					<span className="font-mono">doctor-skey:default</span>.
+					<span className="font-mono">doctor-skey:default:secp256k1</span>.
 				</p>
 			</div>
 

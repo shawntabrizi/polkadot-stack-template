@@ -20,17 +20,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@noble/curves": "^1.6.0",
     "@novasamatech/host-papp": "0.7.0-2",
     "@novasamatech/product-sdk": "^0.6.12",
     "@polkadot-api/descriptors": "file:.papi/descriptors",
     "@polkadot-labs/hdkd": "^0.0.26",
     "@polkadot-labs/hdkd-helpers": "^0.0.27",
-    "@zk-kit/baby-jubjub": "^1.0.3",
-    "@zk-kit/eddsa-poseidon": "^1.1.0",
     "blakejs": "^1.2.1",
     "multiformats": "^13.4.2",
     "polkadot-api": "^1.23.3",
-    "poseidon-lite": "^0.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.12.0",

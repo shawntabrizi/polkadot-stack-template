@@ -30,6 +30,7 @@
     "@polkadot/util-crypto": "^13.0.0"
   },
   "devDependencies": {
+    "@noble/curves": "^1.6.0",
     "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
     "@nomicfoundation/hardhat-viem": "^2.0.0",
     "@parity/hardhat-polkadot": "0.2.7",
@@ -37,10 +38,8 @@
     "@polkadot/keyring": "^14.0.3",
     "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.10",
-    "@zk-kit/baby-jubjub": "^1.0.3",
     "chai": "^4.3.0",
     "hardhat": "^2.27.0",
-    "poseidon-lite": "^0.3.0",
     "prettier": "^3.8.1",
     "prettier-plugin-solidity": "^2.3.1",
     "snarkjs": "^0.7.6",

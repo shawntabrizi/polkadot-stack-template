@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-/// @title MedicalMarket — Phase 5.2
+/// @title MedicalMarket — Phase 5.2 (ECDSA migration)
 /// @notice Encrypted-data marketplace with off-chain cryptographic verification.
 ///         The record is split into a public, medic-signed header (title,
 ///         recordType, recordedAt, facility — browsable pre-purchase), an
 ///         encrypted body (the clinical payload), and a PII compartment
 ///         (patientId, dateOfBirth — encrypted separately, never revealed
-///         to the researcher). The medic signs
-///         Poseidon3(headerCommit, bodyCommit, piiCommit); buyers recompute
-///         the header commit from the on-chain fields and verify the combined
-///         signature off-chain before paying.
+///         to the researcher). The medic signs with their Ethereum key over
+///         keccak256(recordCommit); buyers recover the signer with ecrecover
+///         and compare against listing.medicAddress off-chain before paying.
 ///
-///         The contract does NOT verify Poseidon(headerFields) == headerCommit
-///         on-chain — Phase 5.2 keeps cryptography off-chain. A patient who
-///         supplies header fields that don't hash to the on-chain headerCommit
-///         will see the "medic-verified" badge fail on the listing card in
-///         ResearcherBuy, so the listing is effectively unsellable.
+///         The contract does NOT verify the medic signature on-chain —
+///         Phase 5.2 keeps cryptography off-chain. A patient who supplies
+///         a wrong medicAddress will have the "medic-verified" badge fail on
+///         the listing card in ResearcherBuy, so the listing is effectively
+///         unsellable.
 ///
 ///         At fulfill time the patient encrypts the body for the buyer's
-///         BabyJubJub pubkey (ECDH + Poseidon stream cipher), uploads the
-///         ciphertext to the Statement Store, and calls fulfill() with
-///         ephPk + ciphertextHash. Buyers recompute bodyCommit from the
-///         decrypted plaintext and compare against listing.bodyCommit.
+///         secp256k1 pubkey (ECDH + AES-GCM), uploads the ciphertext to
+///         the Statement Store, and calls fulfill() with ephPubKey +
+///         ciphertextHash. Buyers recompute bodyCommit from the decrypted
+///         plaintext and compare against listing.bodyCommit.
 ///
 ///         Atomicity is relaxed: a dishonest patient could upload garbage to the
 ///         Statement Store. Phase 5.3 (planned) adds an escrow / acknowledge /
@@ -41,17 +40,12 @@ contract MedicalMarket {
 		string recordType;
 		uint64 recordedAt;
 		string facility;
-		uint256 headerCommit; // Poseidon8(encodeHeader(header))
-		uint256 bodyCommit; // Poseidon-chain over encrypted body plaintext[32]
-		uint256 piiCommit; // Poseidon-chain over encrypted PII plaintext[8] (patientId, dob)
-		// TODO(ecdsa-migration): replace BJJ fields with address medicAddress + bytes medicSignature (65 bytes)
-		// and drop Poseidon-based sig. Use ecrecover(keccak256(recordCommit), v, r, s) for on-chain verification.
-		// medic attestation (signs Poseidon3(headerCommit, bodyCommit, piiCommit))
-		uint256 medicPkX;
-		uint256 medicPkY;
-		uint256 sigR8x;
-		uint256 sigR8y;
-		uint256 sigS;
+		uint256 headerCommit; // keccak256 over encoded header field elements
+		uint256 bodyCommit; // keccak256 over encrypted body plaintext field elements
+		uint256 piiCommit; // keccak256 over PII field elements (patientId, dob)
+		// medic attestation: EIP-191 sig over keccak256(recordCommit)
+		address medicAddress;
+		bytes medicSignature; // 65-byte ECDSA signature
 		uint256 price; // minimum price in wei (native PAS)
 		address patient;
 		bool active;
@@ -63,14 +57,12 @@ contract MedicalMarket {
 		uint256 amount;
 		bool confirmed;
 		bool cancelled;
-		uint256 pkBuyerX; // researcher's BabyJubJub pubkey for ECDH
-		uint256 pkBuyerY;
+		bytes buyerPubKey; // 33-byte compressed secp256k1 pubkey for ECIES encryption
 	}
 
 	struct Fulfillment {
-		uint256 ephPkX; // patient's ephemeral pubkey; buyer reconstructs shared secret
-		uint256 ephPkY;
-		uint256 ciphertextHash; // Statement Store lookup key (Poseidon of ciphertext[32])
+		bytes ephPubKey; // 33-byte compressed ephemeral secp256k1 pubkey for ECDH
+		uint256 ciphertextHash; // blake2b-256 hash of the ciphertext bytes (Statement Store key)
 	}
 
 	mapping(uint256 => Listing) private listings;
@@ -90,8 +82,7 @@ contract MedicalMarket {
 		uint256 headerCommit,
 		uint256 bodyCommit,
 		uint256 piiCommit,
-		uint256 medicPkX,
-		uint256 medicPkY,
+		address medicAddress,
 		string title,
 		string recordType,
 		uint64 recordedAt,
@@ -103,32 +94,25 @@ contract MedicalMarket {
 		uint256 indexed orderId,
 		address indexed researcher,
 		uint256 amount,
-		uint256 pkBuyerX,
-		uint256 pkBuyerY
+		bytes buyerPubKey
 	);
 	event SaleFulfilled(
 		uint256 indexed orderId,
 		uint256 indexed listingId,
 		address patient,
 		address researcher,
-		uint256 ephPkX,
-		uint256 ephPkY,
+		bytes ephPubKey,
 		uint256 ciphertextHash
 	);
 	event RecordShared(
 		address indexed patient,
-		uint256 indexed doctorPkX, // indexed for server-side filtering; Y post-filtered in JS
-		uint256 doctorPkY,
+		address indexed doctorAddress,
 		uint256 headerCommit,
 		uint256 bodyCommit,
 		uint256 piiCommit,
-		uint256 medicPkX,
-		uint256 medicPkY,
-		uint256 sigR8x,
-		uint256 sigR8y,
-		uint256 sigS,
-		uint256 ephPkX,
-		uint256 ephPkY,
+		address medicAddress,
+		bytes medicSignature,
+		bytes ephPubKey,
 		uint256 ciphertextHash,
 		string title,
 		string recordType,
@@ -144,25 +128,18 @@ contract MedicalMarket {
 	);
 
 	/// @notice Create a listing. The header fields are stored in the clear so
-	///         researchers can filter before paying; the medic's EdDSA-Poseidon
-	///         signature is over Poseidon3(headerCommit, bodyCommit, piiCommit).
-	///         Buyers recompute the header commit off-chain and verify the
-	///         signature before placing an order. The piiCommit covers PII fields
-	///         (patientId, dateOfBirth) that are encrypted separately and never
-	///         exposed to the researcher.
-	// TODO(ecdsa-migration): replace (medicPkX, medicPkY, sigR8x, sigR8y, sigS) with
-	// (address medicAddress, bytes calldata medicSignature). Store medicAddress so
-	// MedicAuthority.isVerifiedMedic(medicAddress) can be enforced on-chain.
+	///         researchers can filter before paying; the medic's ECDSA signature
+	///         is an EIP-191 sig over keccak256(recordCommit).
+	///         Buyers recover the signer off-chain and compare to medicAddress.
+	///         The piiCommit covers PII fields (patientId, dateOfBirth) that are
+	///         encrypted separately and never exposed to the researcher.
 	function createListing(
 		HeaderInput calldata header,
 		uint256 headerCommit,
 		uint256 bodyCommit,
 		uint256 piiCommit,
-		uint256 medicPkX,
-		uint256 medicPkY,
-		uint256 sigR8x,
-		uint256 sigR8y,
-		uint256 sigS,
+		address medicAddress,
+		bytes calldata medicSignature,
 		uint256 price
 	) external {
 		require(price > 0, "Price must be greater than zero");
@@ -173,8 +150,8 @@ contract MedicalMarket {
 		require(headerCommit != 0, "headerCommit must be non-zero");
 		require(bodyCommit != 0, "bodyCommit must be non-zero");
 		require(piiCommit != 0, "piiCommit must be non-zero");
-		require(medicPkX != 0 || medicPkY != 0, "medicPk must be non-zero");
-		require(sigS != 0, "signature must be non-zero");
+		require(medicAddress != address(0), "medicAddress must be non-zero");
+		require(medicSignature.length == 65, "medicSignature must be 65 bytes");
 
 		uint256 listingId = listingCount;
 		listings[listingId] = Listing({
@@ -185,11 +162,8 @@ contract MedicalMarket {
 			headerCommit: headerCommit,
 			bodyCommit: bodyCommit,
 			piiCommit: piiCommit,
-			medicPkX: medicPkX,
-			medicPkY: medicPkY,
-			sigR8x: sigR8x,
-			sigR8y: sigR8y,
-			sigS: sigS,
+			medicAddress: medicAddress,
+			medicSignature: medicSignature,
 			price: price,
 			patient: msg.sender,
 			active: true
@@ -201,8 +175,7 @@ contract MedicalMarket {
 			headerCommit,
 			bodyCommit,
 			piiCommit,
-			medicPkX,
-			medicPkY,
+			medicAddress,
 			header.title,
 			header.recordType,
 			header.recordedAt,
@@ -211,18 +184,18 @@ contract MedicalMarket {
 		);
 	}
 
-	/// @notice Lock native PAS and register the buyer's BabyJubJub pubkey.
+	/// @notice Lock native PAS and register the buyer's secp256k1 pubkey for ECIES.
 	///         If a lower offer already exists it is refunded and replaced (outbid).
 	///         State is fully written before the external refund call (CEI pattern).
 	///         NOTE: if the outbid researcher is a contract that reverts on receive,
 	///         the refund call fails and the whole tx reverts — their offer can never
 	///         be outbid (griefing). Pull-payment escrow is the production fix.
-	function placeBuyOrder(uint256 listingId, uint256 pkBuyerX, uint256 pkBuyerY) external payable {
+	function placeBuyOrder(uint256 listingId, bytes calldata buyerPubKey) external payable {
 		require(listingId < listingCount, "Listing does not exist");
 		Listing storage listing = listings[listingId];
 		require(listing.active, "Listing is not active");
 		require(msg.value >= listing.price, "Insufficient payment");
-		require(pkBuyerX != 0 || pkBuyerY != 0, "pkBuyer must be non-zero");
+		require(buyerPubKey.length == 33, "buyerPubKey must be 33 bytes");
 
 		// Cache refund target before any state mutation.
 		address prevResearcher;
@@ -245,30 +218,24 @@ contract MedicalMarket {
 			amount: msg.value,
 			confirmed: false,
 			cancelled: false,
-			pkBuyerX: pkBuyerX,
-			pkBuyerY: pkBuyerY
+			buyerPubKey: buyerPubKey
 		});
 		orderCount++;
 		listingPendingOrder[listingId] = orderId + 1;
-		emit OrderPlaced(listingId, orderId, msg.sender, msg.value, pkBuyerX, pkBuyerY);
+		emit OrderPlaced(listingId, orderId, msg.sender, msg.value, buyerPubKey);
 
 		// External call last — consistent with fulfill() and cancelOrder().
 		if (prevResearcher != address(0)) {
-			// possible constant rever blocking funds here.
+			// possible constant revert blocking funds here.
 			(bool ok, ) = payable(prevResearcher).call{value: prevAmount}("");
 			require(ok, "Refund to previous bidder failed");
 		}
 	}
 
-	/// @notice Patient declares the ephemeral pk + Statement Store ciphertext
-	///         hash and releases payment. No on-chain proof: the buyer verifies
-	///         signature + bodyCommit off-chain after decryption.
-	function fulfill(
-		uint256 orderId,
-		uint256 ephPkX,
-		uint256 ephPkY,
-		uint256 ciphertextHash
-	) external {
+	/// @notice Patient declares the ephemeral secp256k1 pubkey + Statement Store
+	///         ciphertext hash and releases payment. No on-chain proof: the buyer
+	///         verifies signature + bodyCommit off-chain after decryption.
+	function fulfill(uint256 orderId, bytes calldata ephPubKey, uint256 ciphertextHash) external {
 		require(orderId < orderCount, "Order does not exist");
 		Order storage order = orders[orderId];
 		require(!order.confirmed, "Order already fulfilled");
@@ -276,17 +243,13 @@ contract MedicalMarket {
 
 		Listing storage listing = listings[order.listingId];
 		require(msg.sender == listing.patient, "Only the patient can fulfill the order");
-		require(ephPkX != 0 || ephPkY != 0, "ephPk must be non-zero");
+		require(ephPubKey.length == 33, "ephPubKey must be 33 bytes");
 		require(ciphertextHash != 0, "ciphertextHash must be non-zero");
 
 		order.confirmed = true;
 		listing.active = false;
 
-		fulfillments[orderId] = Fulfillment({
-			ephPkX: ephPkX,
-			ephPkY: ephPkY,
-			ciphertextHash: ciphertextHash
-		});
+		fulfillments[orderId] = Fulfillment({ephPubKey: ephPubKey, ciphertextHash: ciphertextHash});
 
 		(bool successPatient, ) = listing.patient.call{value: order.amount}("");
 		require(successPatient, "Transfer to patient failed");
@@ -296,8 +259,7 @@ contract MedicalMarket {
 			order.listingId,
 			listing.patient,
 			order.researcher,
-			ephPkX,
-			ephPkY,
+			ephPubKey,
 			ciphertextHash
 		);
 	}
@@ -329,27 +291,19 @@ contract MedicalMarket {
 		emit OrderCancelled(orderId, order.listingId, order.researcher, order.amount);
 	}
 
-	/// @notice Share a medic-signed record with a specific BabyJubJub pubkey
-	///         encrypted via ECDH + Poseidon stream cipher. No storage, no escrow —
-	///         pure event emission. Recipient's inbox reads RecordShared logs
-	///         filtered by their own doctorPkX (indexed).
-	// TODO(ecdsa-migration): replace BJJ (medicPkX, medicPkY, sigR8x, sigR8y, sigS) with
-	// (address medicAddress, bytes calldata medicSignature). Also swap doctor key to an Ethereum address
-	// so DoctorInbox can be indexed by address rather than BJJ point coordinates.
+	/// @notice Share a medic-signed record with a specific doctor address.
+	///         The patient encrypts the body for the doctor's secp256k1 pubkey
+	///         (ECDH + AES-GCM). No storage, no escrow — pure event emission.
+	///         Recipient's inbox reads RecordShared logs filtered by doctorAddress.
 	function shareRecord(
 		HeaderInput calldata header,
 		uint256 headerCommit,
 		uint256 bodyCommit,
 		uint256 piiCommit,
-		uint256 medicPkX,
-		uint256 medicPkY,
-		uint256 sigR8x,
-		uint256 sigR8y,
-		uint256 sigS,
-		uint256 doctorPkX,
-		uint256 doctorPkY,
-		uint256 ephPkX,
-		uint256 ephPkY,
+		address medicAddress,
+		bytes calldata medicSignature,
+		address doctorAddress,
+		bytes calldata ephPubKey,
 		uint256 ciphertextHash
 	) external {
 		require(bytes(header.title).length > 0, "Title cannot be empty");
@@ -359,26 +313,21 @@ contract MedicalMarket {
 		require(headerCommit != 0, "headerCommit must be non-zero");
 		require(bodyCommit != 0, "bodyCommit must be non-zero");
 		require(piiCommit != 0, "piiCommit must be non-zero");
-		require(medicPkX != 0 || medicPkY != 0, "medicPk must be non-zero");
-		require(sigS != 0, "signature must be non-zero");
-		require(doctorPkX != 0 || doctorPkY != 0, "doctorPk must be non-zero");
-		require(ephPkX != 0 || ephPkY != 0, "ephPk must be non-zero");
+		require(medicAddress != address(0), "medicAddress must be non-zero");
+		require(medicSignature.length == 65, "medicSignature must be 65 bytes");
+		require(doctorAddress != address(0), "doctorAddress must be non-zero");
+		require(ephPubKey.length == 33, "ephPubKey must be 33 bytes");
 		require(ciphertextHash != 0, "ciphertextHash must be non-zero");
 
 		emit RecordShared(
 			msg.sender,
-			doctorPkX,
-			doctorPkY,
+			doctorAddress,
 			headerCommit,
 			bodyCommit,
 			piiCommit,
-			medicPkX,
-			medicPkY,
-			sigR8x,
-			sigR8y,
-			sigS,
-			ephPkX,
-			ephPkY,
+			medicAddress,
+			medicSignature,
+			ephPubKey,
 			ciphertextHash,
 			header.title,
 			header.recordType,
@@ -398,11 +347,8 @@ contract MedicalMarket {
 			uint256 headerCommit,
 			uint256 bodyCommit,
 			uint256 piiCommit,
-			uint256 medicPkX,
-			uint256 medicPkY,
-			uint256 sigR8x,
-			uint256 sigR8y,
-			uint256 sigS,
+			address medicAddress,
+			bytes memory medicSignature,
 			uint256 price,
 			address patient,
 			bool active
@@ -413,11 +359,8 @@ contract MedicalMarket {
 			l.headerCommit,
 			l.bodyCommit,
 			l.piiCommit,
-			l.medicPkX,
-			l.medicPkY,
-			l.sigR8x,
-			l.sigR8y,
-			l.sigS,
+			l.medicAddress,
+			l.medicSignature,
 			l.price,
 			l.patient,
 			l.active
@@ -458,28 +401,19 @@ contract MedicalMarket {
 			uint256 amount,
 			bool confirmed,
 			bool cancelled,
-			uint256 pkBuyerX,
-			uint256 pkBuyerY
+			bytes memory buyerPubKey
 		)
 	{
 		Order storage o = orders[id];
-		return (
-			o.listingId,
-			o.researcher,
-			o.amount,
-			o.confirmed,
-			o.cancelled,
-			o.pkBuyerX,
-			o.pkBuyerY
-		);
+		return (o.listingId, o.researcher, o.amount, o.confirmed, o.cancelled, o.buyerPubKey);
 	}
 
-	/// @notice ephemeral pk + Statement Store lookup hash for a fulfilled order.
+	/// @notice ephemeral pubkey + Statement Store lookup hash for a fulfilled order.
 	function getFulfillment(
 		uint256 orderId
-	) external view returns (uint256 ephPkX, uint256 ephPkY, uint256 ciphertextHash) {
+	) external view returns (bytes memory ephPubKey, uint256 ciphertextHash) {
 		Fulfillment storage f = fulfillments[orderId];
-		return (f.ephPkX, f.ephPkY, f.ciphertextHash);
+		return (f.ephPubKey, f.ciphertextHash);
 	}
 
 	function getOrderCount() external view returns (uint256) {
