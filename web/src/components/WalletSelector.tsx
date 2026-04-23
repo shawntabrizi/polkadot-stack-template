@@ -101,39 +101,14 @@ export default function WalletSelector() {
 			setConnecting(name);
 			setConnectError(null);
 			try {
-				let ext = null;
-				// Each attempt races against an 8-second timeout. If the MV3 extension
-				// background worker is sleeping, .enable() hangs silently — aborting and
-				// retrying wakes the worker and triggers the permission popup.
-				for (let i = 0; i < 5; i++) {
-					try {
-						ext = await Promise.race([
-							connectInjectedExtension(name),
-							new Promise<never>((_, rej) =>
-								setTimeout(() => rej(new Error("timeout")), 8000),
-							),
-						]);
-						break;
-					} catch {
-						if (i < 4) await new Promise((r) => setTimeout(r, 800));
-					}
-				}
-				if (!ext) {
-					setConnectError(
-						`Could not connect to ${name}. Click the ${name} icon in your toolbar to wake it, then try again.`,
-					);
-					return;
-				}
-
+				const ext = await connectInjectedExtension(name);
 				extUnsubRef.current?.();
-
 				const extensionAccounts = ext.getAccounts().map(mapExtAccount);
 				const merged = buildAccountList(extensionAccounts);
 				setAccounts(merged);
 				const firstExtIdx = isLocalHost() ? devAccounts.length : 0;
 				setSelectedIdx(Math.min(firstExtIdx, merged.length - 1));
 				setConnectedWallet(name);
-
 				extUnsubRef.current = ext.subscribe((updated) => {
 					const updatedAccounts = updated.map(mapExtAccount);
 					setAccounts(buildAccountList(updatedAccounts));
@@ -141,7 +116,7 @@ export default function WalletSelector() {
 			} catch (e) {
 				console.error("[WalletSelector] connect failed:", e);
 				setConnectError(
-					`Could not connect to ${name}. Check that the extension is installed and unlocked.`,
+					`Could not connect to ${name}. Make sure the extension is unlocked and try again.`,
 				);
 			} finally {
 				setConnecting(null);
