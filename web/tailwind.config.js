@@ -42,8 +42,8 @@ export default {
         },
       },
       fontFamily: {
-        display: ['"Instrument Sans"', "system-ui", "-apple-system", "sans-serif"],
-        body: ['"Instrument Sans"', "system-ui", "-apple-system", "sans-serif"],
+        display: ['"Syne"', "system-ui", "sans-serif"],
+        body: ['"DM Sans"', "system-ui", "-apple-system", "sans-serif"],
         mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       backgroundImage: {

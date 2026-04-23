@@ -132,14 +132,14 @@ export default function App() {
 								<Link
 									key={item.path}
 									to={item.path}
-									className={`relative px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap ${
+									className={`relative px-3 py-1.5 text-sm font-medium transition-all duration-200 whitespace-nowrap ${
 										location.pathname === item.path
-											? "text-white"
-											: "text-text-secondary hover:text-text-primary hover:bg-white/[0.04]"
+											? "text-polka-400"
+											: "text-text-secondary hover:text-text-primary"
 									}`}
 								>
 									{location.pathname === item.path && (
-										<span className="absolute inset-0 rounded-lg bg-polka-500/15 border border-polka-500/25" />
+										<span className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full bg-polka-500" />
 									)}
 									<span className="relative">{item.label}</span>
 								</Link>
