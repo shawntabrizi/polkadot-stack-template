@@ -57,7 +57,7 @@ Compiles contracts, derives the multisig address from `Council1.json` / `Council
 - Full end-to-end flow locally and on Paseo
 - Off-chain BabyJubJub ECDH + Poseidon encryption entirely in the browser
 - Three-compartment Poseidon commitments (header / body / PII separated)
-- Statement Store integration on People Chain
+- Statement Store integration on People Chain (unstable) using local statement store works.
 - 2-of-3 pallet-multisig governance for MedicAuthority
 - Nova Wallet / Spektr mobile support
 
@@ -73,17 +73,19 @@ Compiles contracts, derives the multisig address from `Council1.json` / `Council
 
 **Synthetic data only**: no real patients, no legal review. MVP uses test records only. GDPR / HIPAA legal opinion required before processing real health data.
 
+**Ephemeral ciphertext storage**: encrypted records are stored in the Statement Store, which is ephemeral. Long-term the ciphertext should move to Bulletin Chain so patients can keep their records available without staying online — but Bulletin Chain's large-asset upload path hit size limits in testing (see Design Compromises).
+
 ---
 
 ## Design Compromises
 
 **The original design was a ZK contingent payment.** We built a complete Groth16 circuit (`circuits/medical_disclosure.circom`) — 12.8k constraints — that bound three properties in a single proof: the medic's EdDSA signature over the record commitment, the ECDH encryption binding the ciphertext to the buyer's key, and the Poseidon hash chain linking plaintext to the on-chain commitment. Browser proof generation worked at ~1.1s with snarkjs. The Verifier contract compiled and deployed.
 
-The bottleneck was on-chain verification: BN254 pairing on PVM consumed ~800M gas weight on Paseo, roughly 5–10× the block weight budget. There is no BN254 precompile on Asset Hub today. We filed this as an open question in `docs/product/ZK_ON_PVM_OPEN_QUESTION.md` and dropped the on-chain proof for now. The circuit, zkey, and Verifier are kept in the repo as a working reference for when the precompile lands.
+The bottleneck was on-chain verification: BN254 pairing on PVM consumed ~800M gas weight on Paseo, roughly 5–10× the block weight budget. There is no BN254 precompile on Asset Hub today. We filed this as an open question in `docs/product/ZK_ON_PVM_OPEN_QUESTION.md` and dropped the on-chain proof for now. The circuit, zkey, and Verifier are kept in the repo as a working reference for when the precompile lands. For sure we could took computation off-ciruit but for timing reasons we didn't explore that path.
 
 **Why Poseidon instead of keccak256**: the commitment scheme uses Poseidon hashing because it was designed to be verified inside the Groth16 circuit — it costs ~300 constraints vs ~27,000 for keccak256. Now that verification is off-chain, the commitment could migrate to keccak256 (tracked as `TODO(ecdsa-migration)` throughout the frontend). The migration would also eliminate the `@zk-kit` bundle (643 kB) which currently causes Bulletin Chain deployment issues.
 
-**Why multisig for medic authority**: a 2-of-3 pallet-multisig owns the `MedicAuthority` contract instead of a DAO or People Chain identity judgements. Simpler to bootstrap. The on-chain identity path requires the People Chain KnownGood integration which isn't done yet.
+**Why multisig for medic authority**: a 2-of-3 pallet-multisig owns the `MedicAuthority` contract instead of a DAO or People Chain identity judgements. Simpler to bootstrap. The on-chain identity path requires the People Chain KnownGood integration which isn't done yet. And for curiosity i wanted to explore pallet-multisig as a governance primitive.
 
 ---
 
