@@ -2,7 +2,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { connectInjectedExtension, getInjectedExtensions } from "polkadot-api/pjs-signer";
 import { SpektrExtensionName } from "@novasamatech/product-sdk";
 import { useChainStore } from "../store/chainStore";
-import { devAccounts, substrateToH160, type AppAccount } from "../hooks/useAccount";
+import {
+	devAccounts,
+	getOrCreateStatementSigner,
+	substrateToH160,
+	type AppAccount,
+} from "../hooks/useAccount";
 import Spinner from "./Spinner";
 
 function shortenAddr(addr: string): string {
@@ -24,6 +29,7 @@ function mapExtAccount(acc: {
 		address: acc.address,
 		signer: acc.polkadotSigner as AppAccount["signer"],
 		evmAddress: substrateToH160(acc.polkadotSigner.publicKey),
+		localSigner: getOrCreateStatementSigner(acc.address),
 	};
 }
 

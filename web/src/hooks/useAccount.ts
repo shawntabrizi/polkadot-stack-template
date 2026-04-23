@@ -39,6 +39,31 @@ export type LocalSigner = {
 	signBytes: (data: Uint8Array) => Promise<Uint8Array>;
 };
 
+// Extension wallets (Polkadot.js, Talisman, SubWallet) wrap raw bytes with
+// <Bytes>...</Bytes> before signing, which pallet-statement-store's signature
+// verification does not accept. A per-address burner sr25519 keypair signs the
+// Statement Store proof; the extension still signs every on-chain extrinsic.
+// The burner mini-secret lives in localStorage and is generated on first use.
+export function getOrCreateStatementSigner(address: string): LocalSigner {
+	const storageKey = `stmt-burner-mini-secret:${address}`;
+	let hex = localStorage.getItem(storageKey);
+	if (!hex) {
+		const bytes = new Uint8Array(32);
+		crypto.getRandomValues(bytes);
+		hex = Array.from(bytes)
+			.map((b) => b.toString(16).padStart(2, "0"))
+			.join("");
+		localStorage.setItem(storageKey, hex);
+	}
+	const miniSecret = new Uint8Array(32);
+	for (let i = 0; i < 32; i++) miniSecret[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+	const keypair = sr25519CreateDerive(miniSecret)("");
+	return {
+		publicKey: keypair.publicKey,
+		signBytes: (data: Uint8Array) => Promise.resolve(keypair.sign(data)),
+	};
+}
+
 export type AppAccount = {
 	name: string;
 	/** SS58-encoded Substrate address */
