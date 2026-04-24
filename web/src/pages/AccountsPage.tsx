@@ -10,38 +10,14 @@ import {
 	connectInjectedExtension,
 	type InjectedPolkadotAccount,
 } from "polkadot-api/pjs-signer";
-import { injectSpektrExtension, SpektrExtensionName } from "@novasamatech/product-sdk";
-import { getSs58AddressInfo, Keccak256 } from "@polkadot-api/substrate-bindings";
+import { isInsideContainerSync } from "@polkadot-apps/host";
+import { HostProvider } from "@polkadot-apps/signer";
+import { ss58ToH160 } from "@polkadot-apps/address";
 
-type HostEnvironment = "desktop-webview" | "web-iframe" | "standalone";
-
-function detectHostEnvironment(): HostEnvironment {
-	if (typeof window === "undefined") return "standalone";
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	if ((window as any).__HOST_WEBVIEW_MARK__) return "desktop-webview";
-	try {
-		if (window !== window.top) return "web-iframe";
-	} catch {
-		return "web-iframe";
-	}
-	return "standalone";
-}
-
-function isInHost(): boolean {
-	return detectHostEnvironment() !== "standalone";
-}
-
-function ss58ToH160(ss58Address: string): `0x${string}` {
-	const info = getSs58AddressInfo(ss58Address);
-	if (!info.isValid) return "0x0000000000000000000000000000000000000000";
-	const pub = info.publicKey;
-	const isEthDerived = pub.slice(20).every((b) => b === 0xee);
-	const ethBytes = isEthDerived ? pub.slice(0, 20) : Keccak256(pub).slice(-20);
-	const hex = Array.from(ethBytes)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	return `0x${hex}`;
-}
+// Spektr is the extension identifier used by the Polkadot host wallet after
+// injection. We keep it as a constant so we can filter it out of the generic
+// browser-extension list below.
+const SPEKTR_EXTENSION_NAME = "spektr";
 
 interface DisplayAccount {
 	name: string;
@@ -152,7 +128,7 @@ export default function AccountsPage() {
 		let cancelled = false;
 
 		async function initSpektr() {
-			if (!isInHost()) {
+			if (!isInsideContainerSync()) {
 				setSpektrStatus("unavailable");
 				return;
 			}
@@ -160,7 +136,7 @@ export default function AccountsPage() {
 			try {
 				let injected = false;
 				for (let i = 0; i < 10; i++) {
-					if (await injectSpektrExtension()) {
+					if (await HostProvider.injectSpektr()) {
 						injected = true;
 						break;
 					}
@@ -170,7 +146,7 @@ export default function AccountsPage() {
 					setSpektrStatus("failed");
 					return;
 				}
-				const ext = await connectInjectedExtension(SpektrExtensionName);
+				const ext = await connectInjectedExtension(SPEKTR_EXTENSION_NAME);
 				if (cancelled) {
 					ext.disconnect();
 					return;
@@ -200,7 +176,9 @@ export default function AccountsPage() {
 	// Detect available browser extension wallets on mount
 	useEffect(() => {
 		try {
-			const wallets = getInjectedExtensions().filter((name) => name !== SpektrExtensionName);
+			const wallets = getInjectedExtensions().filter(
+				(name) => name !== SPEKTR_EXTENSION_NAME,
+			);
 			setAvailableWallets(wallets);
 		} catch {
 			// No injected extensions available

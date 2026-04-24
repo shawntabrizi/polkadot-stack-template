@@ -135,6 +135,23 @@ The EVM contracts use standard Hardhat. The PVM contracts use the Parity Hardhat
 
 Dependencies are installed automatically via `npm install` in each contract directory. No global installs required.
 
+### Frontend deployment tooling (optional)
+
+Only needed if you plan to deploy `web/` to IPFS + DotNS via `scripts/deploy-frontend.sh`. Skip this section to run and build locally.
+
+- **playground-cli (`dot`)**: build + Bulletin upload + DotNS registration in one command.
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/paritytech/playground-cli/main/install.sh | bash
+  dot init                 # one-time: QR login, toolchain, account funding, H160 map
+  ```
+- **ipfs (Kubo)**: required by `dot deploy`.
+  ```bash
+  brew install ipfs && ipfs init        # macOS
+  # Linux: https://docs.ipfs.tech/install/command-line/
+  ```
+
+See [`docs/DEPLOYMENT.md`](DEPLOYMENT.md#dotns-ipfs--polkadot-naming) for the full flow.
+
 ## Building
 
 ### Build the Runtime

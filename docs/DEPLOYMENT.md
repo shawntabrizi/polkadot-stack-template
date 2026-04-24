@@ -50,21 +50,27 @@ The domain basename is entered when you dispatch the workflow. Domain registrati
 - Enter a unique DotNS basename (lowercase, 9+ letters followed by exactly 2 digits, e.g. `my-cool-project42`)
 - The workflow uses Alice's dev account by default, which works for free registration on Paseo testnet. To use your own account, set the `DOTNS_MNEMONIC` secret in your repo settings.
 
-**Local IPFS deployment:**
+**Local IPFS + DotNS deployment via `dot` (playground-cli):**
 
-You can also deploy to IPFS locally without CI:
+You can deploy locally without CI using [playground-cli](https://github.com/paritytech/playground-cli). `dot deploy` builds the frontend, uploads it to the Bulletin Chain, and registers a `.dot` domain in a single step.
 
 ```bash
-# Install web3.storage CLI (one-time)
-npm install -g @web3-storage/w3cli
-w3 login your@email.com
-w3 space create polkadot-stack-template
+# Install playground-cli (one-time)
+curl -fsSL https://raw.githubusercontent.com/paritytech/playground-cli/main/install.sh | bash
+
+# First-run setup (QR login, toolchain, account funding, H160 map)
+dot init
+
+# IPFS Kubo is also required (installed by `dot init`, or manually):
+brew install ipfs && ipfs init   # macOS
 
 # Deploy
-./scripts/deploy-frontend.sh
+./scripts/deploy-frontend.sh --domain polkadot-stack-template00.dot
 ```
 
-This builds the frontend, uploads to IPFS, and prints the gateway URL plus the DotNS follow-up steps.
+The script wraps `dot deploy --signer dev --domain <name> --buildDir dist`. Set the `MNEMONIC` environment variable (a Substrate URI like `//Alice` or a 12-word phrase) to override the default dev signer. Pass `--playground` to also list the app in the Playground registry.
+
+> Targets **Paseo testnet** only; mainnet is not yet supported by playground-cli.
 
 ### Other platforms
 

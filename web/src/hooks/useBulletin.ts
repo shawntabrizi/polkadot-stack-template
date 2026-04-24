@@ -2,6 +2,7 @@ import { createClient, type PolkadotClient, type PolkadotSigner, Binary, Enum } 
 import { getWsProvider } from "polkadot-api/ws-provider/web";
 import { withPolkadotSdkCompat } from "polkadot-api/polkadot-sdk-compat";
 import { bulletin } from "@polkadot-api/descriptors";
+import { submitAndWatch } from "@polkadot-apps/tx";
 
 const BULLETIN_WS = "wss://paseo-bulletin-rpc.polkadot.io";
 const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 MiB
@@ -41,7 +42,6 @@ export async function checkBulletinAuthorization(
 
 /**
  * Upload file bytes to the Bulletin Chain via TransactionStorage.store().
- * Wraps the Observable-based signSubmitAndWatch in a Promise.
  */
 export async function uploadToBulletin(
 	fileBytes: Uint8Array,
@@ -58,25 +58,8 @@ export async function uploadToBulletin(
 		data: Binary.fromBytes(fileBytes),
 	});
 
-	return new Promise<void>((resolve, reject) => {
-		const timeout = setTimeout(() => {
-			subscription.unsubscribe();
-			reject(new Error("Bulletin Chain upload timed out"));
-		}, UPLOAD_TIMEOUT_MS);
-
-		const subscription = tx.signSubmitAndWatch(signer).subscribe({
-			next: (ev) => {
-				if (ev.type === "txBestBlocksState" && ev.found) {
-					clearTimeout(timeout);
-					subscription.unsubscribe();
-					resolve();
-				}
-			},
-			error: (err) => {
-				clearTimeout(timeout);
-				subscription.unsubscribe();
-				reject(err);
-			},
-		});
-	});
+	const result = await submitAndWatch(tx, signer, { timeoutMs: UPLOAD_TIMEOUT_MS });
+	if (!result.ok) {
+		throw new Error("Bulletin Chain upload rejected by chain");
+	}
 }

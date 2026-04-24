@@ -1,63 +1,81 @@
 #!/usr/bin/env bash
+# Deploy the frontend to Bulletin Chain and register a DotNS domain via
+# playground-cli (the `dot` command). Wraps `dot deploy` so the workflow
+# stays a single script invocation.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Parse flags
+DOMAIN=""
+PUBLISH=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --domain|-d) DOMAIN="$2"; shift 2 ;;
-        *) echo "Unknown argument: $1"; echo "Usage: $0 [--domain <name.dot>]"; exit 1 ;;
+        --playground|-p) PUBLISH=1; shift ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: scripts/deploy-frontend.sh [--domain <name>] [--playground]
+
+Builds web/ and deploys it to the Polkadot Bulletin Chain, registering a
+DotNS domain in one step. Runs `dot deploy` under the hood.
+
+Options:
+  -d, --domain <name>   DotNS label (default: polkadot-stack-template00.dot)
+  -p, --playground      Also publish to the Playground registry
+
+Environment:
+  MNEMONIC   Optional Substrate URI (e.g. '//Alice' or a full 12-word
+             mnemonic) passed to `dot deploy --suri`. When unset, the
+             shared dev signer (`--signer dev`) is used.
+
+Prerequisites:
+  dot (playground-cli):
+    curl -fsSL https://raw.githubusercontent.com/paritytech/playground-cli/main/install.sh | bash
+  ipfs (Kubo):
+    macOS: brew install ipfs && ipfs init
+    Linux: https://docs.ipfs.tech/install/command-line/
+
+First-run setup:
+  dot init            # QR login, toolchain, account funding, H160 map
+EOF
+            exit 0
+            ;;
+        *) echo "Unknown argument: $1"; echo "Run '$0 --help' for usage."; exit 1 ;;
     esac
 done
 
-# Domain to deploy to — flag > env var > default
 DOMAIN="${DOMAIN:-polkadot-stack-template00.dot}"
 
-echo "=== Deploy Frontend to Bulletin Chain ==="
+echo "=== Deploy Frontend via playground-cli (dot) ==="
 echo "  Domain: $DOMAIN"
 echo "  URL:    https://$DOMAIN.li"
 echo ""
 
-# Check prerequisites
-if ! command -v bulletin-deploy &>/dev/null; then
-    echo "ERROR: bulletin-deploy not installed."
-    echo "Run: npm install -g bulletin-deploy"
+if ! command -v dot &>/dev/null; then
+    echo "ERROR: 'dot' (playground-cli) not installed."
+    echo "Install: curl -fsSL https://raw.githubusercontent.com/paritytech/playground-cli/main/install.sh | bash"
     exit 1
 fi
 
 if ! command -v ipfs &>/dev/null; then
-    echo "ERROR: IPFS Kubo not installed (required by bulletin-deploy)."
+    echo "ERROR: IPFS (Kubo) not installed (required by dot deploy)."
     echo "macOS: brew install ipfs && ipfs init"
     echo "Linux: see https://docs.ipfs.tech/install/command-line/"
     exit 1
 fi
 
-# Read MNEMONIC from hardhat vars if not set in environment (Linux/macOS).
-HARDHAT_VARS_FILE="${HARDHAT_VARS_FILE:-}"
-if [ -z "${HARDHAT_VARS_FILE:-}" ]; then
-    HARDHAT_VARS_FILE="$(
-        node -e "const fs=require('fs');const os=require('os');const path=require('path');const home=os.homedir();const cand=[process.env.HARDHAT_VARS_FILE,path.join(home,'Library/Preferences/hardhat-nodejs/vars.json'),path.join(home,'.config/hardhat-nodejs/vars.json')].filter(Boolean);for(const p of cand){try{fs.accessSync(p,fs.constants.R_OK);process.stdout.write(p);process.exit(0);}catch{}}"
-    )"
-fi
-
-if [ -z "${MNEMONIC:-}" ] && [ -n "${HARDHAT_VARS_FILE:-}" ] && [ -f "$HARDHAT_VARS_FILE" ]; then
-    MNEMONIC=$(node -e "try{const v=require('$HARDHAT_VARS_FILE');process.stdout.write(v.vars.MNEMONIC??'')}catch(e){}" 2>/dev/null || true)
-fi
-
-# Build frontend
-echo "[1/2] Building frontend..."
-cd "$ROOT_DIR/web"
-npm install --silent
-npm run build
-echo "  Build output: web/dist/"
-echo ""
-
-# Deploy to Bulletin Chain
-echo "[2/2] Deploying to Bulletin Chain..."
+SIGNER_ARGS=(--signer dev)
 if [ -n "${MNEMONIC:-}" ]; then
-    MNEMONIC="$MNEMONIC" bulletin-deploy "$ROOT_DIR/web/dist" "$DOMAIN"
-else
-    bulletin-deploy "$ROOT_DIR/web/dist" "$DOMAIN"
+    SIGNER_ARGS+=(--suri "$MNEMONIC")
 fi
+
+DEPLOY_ARGS=(--domain "$DOMAIN" --buildDir dist "${SIGNER_ARGS[@]}")
+if [ "$PUBLISH" -eq 1 ]; then
+    DEPLOY_ARGS+=(--playground)
+fi
+
+cd "$ROOT_DIR/web"
+
+echo "Running: dot deploy ${DEPLOY_ARGS[*]}"
+dot deploy "${DEPLOY_ARGS[@]}"
