@@ -104,7 +104,28 @@ DotNS provides `.dot` domain names that resolve to IPFS content, enabling human-
 
 ### Deployment
 
-The GitHub Actions workflow builds the frontend, uploads to IPFS, and registers/updates the DotNS domain when you manually trigger it. The local script (`scripts/deploy-frontend.sh`) uploads to IPFS via the `w3` CLI and then prints the DotNS follow-up steps.
+The GitHub Actions workflow builds the frontend, uploads to IPFS, and registers/updates the DotNS domain when you manually trigger it. The local script (`scripts/deploy-frontend.sh`) wraps [playground-cli](#playground-cli-dot), which builds, uploads to Bulletin Chain, and registers the `.dot` domain in a single call.
+
+## playground-cli (`dot`)
+
+A developer CLI from Parity that streamlines Polkadot dApp workflows end-to-end — auth, toolchain, build, and deployment to Bulletin Chain + DotNS.
+
+- **Package**: [`paritytech/playground-cli`](https://github.com/paritytech/playground-cli) (installs as `dot`)
+- **Used for**: `scripts/deploy-frontend.sh` wraps `dot deploy` to build, upload to Bulletin, and register a `.dot` domain in one step
+- **Install**: `curl -fsSL https://raw.githubusercontent.com/paritytech/playground-cli/main/install.sh | bash`
+- **First-run setup**: `dot init` (QR login, toolchain, account funding, H160 map)
+- **Scope**: Paseo testnet only; mainnet is not yet supported
+
+### Relevant commands
+
+```bash
+dot init                                               # one-time setup
+dot build --dir web                                    # auto-detect pm, run build
+dot deploy --signer dev --domain my-app --buildDir dist
+dot mod <domain>                                       # fork/clone an existing Playground app
+```
+
+`dot` is optional — the frontend still builds with plain `npm run build`, and deployment to GitHub Pages or any static host continues to work. `dot` is the simplest path to a testnet URL with Bulletin + DotNS.
 
 ## PAPI (Polkadot API)
 

@@ -1,5 +1,13 @@
 import { Bytes, compact, u8 } from "@polkadot-api/substrate-bindings";
-import { blake2b } from "blakejs";
+import { blake2b256 } from "@polkadot-apps/utils";
+
+// This hook intentionally talks to the Statement Store RPC at the protocol
+// level (statement_submit + statement_dump, raw SCALE field decoding) so the
+// StatementStorePage can show every statement in the node's store — including
+// ones submitted by the CLI outside any app-topic scheme. The higher-level
+// StatementStoreClient from @polkadot-apps/statement-store is an app pub/sub
+// abstraction that filters to a single appName topic, which would hide those
+// raw CLI statements from the learning view.
 
 const MAX_STATEMENT_STORE_ENCODED_SIZE = 1024 * 1024 - 1;
 const FIELD_TAG_AUTH = 0;
@@ -293,7 +301,7 @@ export async function fetchStatements(wsUrl: string): Promise<DecodedStatement[]
 	const encoded: string[] = result.result ?? [];
 	return encoded.map((hex) => {
 		const bytes = hexToBytes(hex);
-		const hash = "0x" + bytesToHex(blake2b(bytes, undefined, 32));
+		const hash = "0x" + bytesToHex(blake2b256(bytes));
 		const decoded = decodeStatement(bytes);
 		return { hash, ...decoded };
 	});
